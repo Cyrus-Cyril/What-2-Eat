@@ -1,0 +1,37 @@
+# --- 后端 Python 忽略项 ---
+# 忽略虚拟环境文件夹（这个最占空间，千万别传）
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+
+# 忽略 Python 运行产生的缓存文件
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# 忽略本地环境变量配置文件（里面可能有你的 API Key）
+backend/.env
+
+
+# --- 前端 Node.js 忽略项 ---
+# 忽略前端依赖包（体积巨大，队友可以自己 npm install）
+frontend/node_modules/
+
+# 忽略打包后的产物
+frontend/dist/
+frontend/build/
+
+# 前端日志文件
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# --- 系统与编辑器忽略项 ---
+# 忽略 macOS 的隐藏文件
+.DS_Store
+
+# 忽略 VS Code 的本地设置
+.vscode/
+.idea/
