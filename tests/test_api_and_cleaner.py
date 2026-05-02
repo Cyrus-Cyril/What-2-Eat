@@ -1,15 +1,15 @@
 """
-test_api_and_cleaner.py
 测试数据入口模块的稳定性和异常处理
 """
-
 import sys
-sys.path.insert(0, ".")
+import os
 
-from amap_client import fetch_nearby_restaurants
-from data_cleaner import clean_restaurants, clean_restaurant
-from restaurant_model import Restaurant
-from main import get_candidate_restaurants
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.services.amap_client import fetch_nearby_restaurants
+from app.services.data_cleaner import clean_restaurants, clean_restaurant
+from app.models.restaurant import Restaurant
+from app.services.data_entry import get_candidate_restaurants
 
 
 def test_normal_case():
@@ -19,14 +19,14 @@ def test_normal_case():
     results = get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=20)
     assert len(results) > 0, "应该返回餐馆数据"
     assert all(k in results[0] for k in ["restaurant_id", "name", "category", "distance_m", "rating", "avg_price", "address", "latitude", "longitude"]), "字段应该完整"
-    print(f"✓ 成功返回 {len(results)} 条数据，字段完整")
+    print(f"OK 成功返回 {len(results)} 条数据，字段完整")
 
 
 def test_invalid_coordinates():
     """异常情况：无效坐标"""
     print("=" * 50)
     print("测试2: 无效坐标（经度超出范围）")
-    results = get_candidate_restaurants(200.0, 31.230416)  # 经度超出范围
+    results = get_candidate_restaurants(200.0, 31.230416)
     print(f"  返回结果: {len(results)} 条（预期可能为空或少量）")
 
 
@@ -59,19 +59,16 @@ def test_data_cleaner_edge_cases():
     print("=" * 50)
     print("测试6: 数据清洗边界情况")
 
-    # 情况1: 缺失关键字段
-    raw_missing = {"name": "测试餐馆"}  # 缺少id和location
+    raw_missing = {"name": "测试餐馆"}
     result = clean_restaurant(raw_missing)
     assert result is None, "缺少关键字段应该返回None"
-    print("  ✓ 缺失字段处理正确")
+    print("  OK 缺失字段处理正确")
 
-    # 情况2: 坐标格式异常
     raw_bad_location = {"id": "123", "name": "测试", "location": "invalid"}
     result = clean_restaurant(raw_bad_location)
     assert result is None, "坐标格式异常应该返回None"
-    print("  ✓ 坐标异常处理正确")
+    print("  OK 坐标异常处理正确")
 
-    # 情况3: 正常数据
     raw_normal = {
         "id": "test123",
         "name": "测试餐馆",
@@ -85,7 +82,7 @@ def test_data_cleaner_edge_cases():
     assert result is not None, "正常数据应该成功解析"
     assert result.category == "川菜", "类别应该取最后一级"
     assert result.rating == 4.5, "评分应该正确解析"
-    print("  ✓ 正常数据解析正确")
+    print("  OK 正常数据解析正确")
 
 
 def test_restaurant_to_dict():
@@ -106,7 +103,7 @@ def test_restaurant_to_dict():
     d = r.to_dict()
     assert isinstance(d, dict), "应该返回字典"
     assert d["name"] == "测试餐厅", "字段值应该正确"
-    print(f"  ✓ to_dict() 正常工作: {d}")
+    print(f"  OK to_dict() 正常工作: {d}")
 
 
 def test_field_completeness():
@@ -116,22 +113,22 @@ def test_field_completeness():
     results = get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=5)
 
     required_fields = [
-        "restaurant_id",  # 餐馆ID
-        "name",           # 名称
-        "category",       # 类别
-        "distance_m",     # 距离
-        "rating",         # 评分
-        "avg_price",      # 人均
-        "address",        # 地址
-        "latitude",       # 纬度
-        "longitude"       # 经度
+        "restaurant_id",
+        "name",
+        "category",
+        "distance_m",
+        "rating",
+        "avg_price",
+        "address",
+        "latitude",
+        "longitude"
     ]
 
     for r in results:
         missing = [f for f in required_fields if f not in r]
         assert not missing, f"缺少字段: {missing}"
 
-    print(f"  ✓ {len(results)} 条数据字段完整: {required_fields}")
+    print(f"  OK {len(results)} 条数据字段完整: {required_fields}")
 
 
 if __name__ == "__main__":
@@ -150,13 +147,13 @@ if __name__ == "__main__":
         test_field_completeness()
 
         print("\n" + "=" * 60)
-        print("✓ 所有测试通过！数据入口模块运行稳定")
+        print("OK 所有测试通过！数据入口模块运行稳定")
         print("=" * 60)
     except AssertionError as e:
-        print(f"\n✗ 测试失败: {e}")
+        print(f"\nFAIL 测试失败: {e}")
         sys.exit(1)
     except Exception as e:
-        print(f"\n✗ 异常: {e}")
+        print(f"\nFAIL 异常: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
