@@ -114,7 +114,20 @@ Content-Type: application/json
       "latitude": 30.5312,
       "longitude": 114.3621,
       "score": 0.85,
-      "reason": "距离仅350m,非常近；评分4.5分,口碑好；符合你的"川菜"口味偏好；人均¥45"
+          "reason": "距离仅350m,非常近；评分4.5分,口碑好；符合你的\"川菜\"口味偏好；人均¥45",
+          "explain": {
+            "scores": { "distance": 0.68, "price": 0.13, "rating": 0.92, "tag": 0.0 },
+            "matched_tags": [],
+            "reason_hint": ["步行可达","口碑极佳"],
+            "summary": "步行可达的高口碑川菜馆",
+            "reasoning_logic": { "primary_factor": "用户口碑", "secondary_factor": "地理位置" },
+            "dimension_details": [
+              { "dimension": "用户口碑", "detail": "评分 4.5，口碑很好", "score_impact": "high" },
+              { "dimension": "地理位置", "detail": "步行约5分钟", "score_impact": "medium" },
+              { "dimension": "人均价格", "detail": "人均约45元，符合预算", "score_impact": "medium" }
+            ],
+            "ai_speech": null
+          }
     }
   ],
   "total": 1
@@ -130,6 +143,28 @@ Content-Type: application/json
 | `-1` | 异常（接口调用失败等） |
 
 ---
+
+## 4.1 解释系统扩展说明（新增）
+
+从 2026-05-04 起，推荐接口支持可选的解释系统返回，前端可通过 `RecommendResponse` 的 `explanation_system` 字段开启/解析：
+
+- `explanation_system`（可选）：全局意图综述，包含：
+  - `welcome_narrative`：向用户展示的自然语言综述（字符串）
+  - `structured_context`：结构化上下文，字段包括 `intent_mode`, `core_tags`, `adjusted_weights`
+
+- `data[][].explain`：每条餐馆的解释信息已由原始的字符串数组扩展为结构化对象（向后兼容）：
+  - `scores`：距离/价格/评分/标签等维度分数
+  - `matched_tags`：命中的标签
+  - `reason_hint`：简短的规则提示（保留原有功能）
+  - `summary`：短句摘要，建议前端放在卡片首行
+  - `reasoning_logic`：`primary_factor` / `secondary_factor`，展示为什么被选中
+  - `dimension_details`：逐维度证据列表（`dimension`/`detail`/`score_impact`）
+  - `ai_speech`：可选的 LLM 生成话术，供详情页使用，若未生成则为 `null`
+
+前端渲染建议：
+- 卡片摘要优先展示 `explain.summary`，次要展示 `reason_hint`；
+- 详情弹窗展示 `dimension_details` 的证据链，并在可用时展示 `ai_speech`；
+- 若 `explanation_system.structured_context.fallback_from_hard_filter` 为真，展示相应提示说明系统已将硬过滤降级为软增强。
 
 ### 3.3 提交用餐反馈
 
