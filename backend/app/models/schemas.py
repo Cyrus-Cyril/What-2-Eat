@@ -7,12 +7,26 @@ from pydantic import BaseModel, Field
 
 # ── 推荐接口 ──────────────────────────────────────────────
 
+class ExplainScores(BaseModel):
+    distance: float = Field(default=0.0)
+    price: float = Field(default=0.0)
+    rating: float = Field(default=0.0)
+    tag: float = Field(default=0.0)
+
+
+class ExplainData(BaseModel):
+    scores: ExplainScores = Field(default_factory=ExplainScores)
+    matched_tags: list[str] = Field(default_factory=list)
+    reason_hint: list[str] = Field(default_factory=list)
+
+
 class RecommendRequest(BaseModel):
-    user_id: str | None = Field(default=None, description="用户标识（数据库就绪后必填）")
-    longitude: float = Field(description="用户当前经度（GCJ-02）", examples=[114.35968])
-    latitude: float = Field(description="用户当前纬度（GCJ-02）", examples=[30.52878])
+    user_id: str | None = Field(default=None, description="用户标识")
+    query: str | None = Field(default=None, description="自然语言输入（如『想吃麻辣火锅』）")
+    longitude: float = Field(default=114.362, description="用户当前经度（GCJ-02）", examples=[114.35968])
+    latitude: float = Field(default=30.532, description="用户当前纬度（GCJ-02）", examples=[30.52878])
     radius: int = Field(default=1000, ge=50, le=50000, description="搜索半径（米）")
-    max_count: int = Field(default=20, ge=1, le=50, description="最多返回餐馆数")
+    max_count: int = Field(default=10, ge=1, le=50, description="最多返回餐馆数")
     budget_min: float | None = Field(default=None, ge=0, description="最低预算（元）")
     budget_max: float | None = Field(default=None, ge=0, description="最高预算（元）")
     taste: str | None = Field(default=None, description="口味偏好（如川菜、火锅）")
@@ -32,6 +46,7 @@ class RestaurantOut(BaseModel):
     longitude: float = Field(description="经度（GCJ-02）")
     score: float = Field(default=0.0, description="推荐综合评分 0~1")
     reason: str = Field(default="", description="推荐理由说明")
+    explain: ExplainData | None = Field(default=None, description="结构化解释数据（供 LLM 模块使用）")
 
 
 class RecommendResponse(BaseModel):
@@ -45,6 +60,7 @@ class RecommendResponse(BaseModel):
 
 class FeedbackRequest(BaseModel):
     user_id: str = Field(description="用户标识")
+    recommendation_id: str | None = Field(default=None, description="对应的推荐记录ID")
     restaurant_id: str = Field(description="餐馆ID")
     rating: int = Field(ge=1, le=5, description="满意度评分 1~5")
     chosen: bool = Field(default=True, description="是否实际选择了该餐馆")
