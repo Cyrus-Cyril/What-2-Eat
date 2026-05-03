@@ -1,9 +1,11 @@
 """
 数据入口服务 —— 对外暴露 get_candidate_restaurants()
 整合 amap_client + data_cleaner，输出结构化餐馆列表
+USE_MOCK=true 时直接返回 mock_data 中的测试数据
 """
 import logging
 
+import config
 from app.services.amap_client import fetch_nearby_restaurants
 from app.services.data_cleaner import clean_restaurants
 from app.models.restaurant import Restaurant
@@ -16,6 +18,11 @@ def get_candidate_restaurants(longitude: float, latitude: float,
                                max_count: int = 20) -> list[dict]:
 
     logger.info("搜索位置：(%.6f, %.6f) 半径=%dm 数量=%d", longitude, latitude, radius, max_count)
+
+    if config.USE_MOCK:
+        from app.services.mock_data import get_mock_restaurants
+        logger.info("USE_MOCK=true，使用 Mock 数据")
+        return get_mock_restaurants(max_count)
 
     raw_data = fetch_nearby_restaurants(longitude, latitude, radius, max_count)
 

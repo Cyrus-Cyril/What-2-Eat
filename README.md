@@ -43,6 +43,13 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+在运行服务前，若需要使用大模型（LLM）相关功能，请在项目根目录创建 `.env` 文件：
+
+```bash
+cp .env.example .env
+# 编辑 .env 填入你的 LLM_API_KEY 和 LLM_API_URL
+```
+
 启动后访问 `http://localhost:8000/docs` 查看 API 文档。
 
 ### 前端
@@ -57,3 +64,7 @@ uvicorn app.main:app --reload
 | `SERVER_HOST` | 服务监听地址 | `0.0.0.0` |
 | `SERVER_PORT` | 服务端口 | `8000` |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
+| `LLM_API_KEY` | 大模型服务的 API Key（若使用） | 空 |
+| `LLM_API_URL` | 大模型服务的请求地址（若使用） | 空 |
+
+说明：仓库中提供了 [.env.example](./.env.example) 示例文件，开发者应复制为 `.env` 并填写真实值（不要将 `.env` 提交到远程仓库）。

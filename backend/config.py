@@ -4,6 +4,11 @@ config.py
 """
 import os
 import logging
+from dotenv import load_dotenv, find_dotenv
+
+
+# Load .env from project root if present
+load_dotenv(find_dotenv())
 
 # ── 高德地图 API ──────────────────────────────────────────
 AMAP_API_KEY = os.getenv("AMAP_API_KEY", "6f38295e3f0fe606c75ea136b154db33")
@@ -14,14 +19,19 @@ DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))
 
 # ── 大模型 API ────────────────────────────────────────────
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_API_URL = os.getenv("LLM_API_URL", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
+LLM_API_URL = os.getenv("LLM_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen-turbo")
 
 # ── 服务端口 ──────────────────────────────────────────────
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 
-# ── 数据库（预留，后续由5号成员配置）──────────────────────
+# ── Mock 模式 ──────────────────────────────────────────────
+USE_MOCK = os.getenv("USE_MOCK", "false").lower() == "true"
+
+# ── 数据库 ──────────────────────────────────────────────────
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "master.db"))
+DB_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 # 主库（写）
 DB_MASTER_URL = os.getenv("DB_MASTER_URL", "sqlite:///./data/master.db")
 # 从库（读）

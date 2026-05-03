@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import setup_logging, SERVER_HOST, SERVER_PORT
 from app.api.routes import router
+from app.db.database import init_db
 
 setup_logging()
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(application: FastAPI):
     logger.info("=" * 50)
     logger.info("What-2-Eat 后端服务启动中...")
+    await init_db()
     logger.info(f"API 文档: http://{SERVER_HOST}:{SERVER_PORT}/docs")
     logger.info("=" * 50)
     yield
