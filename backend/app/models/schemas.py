@@ -2,6 +2,7 @@
 app/models/schemas.py
 Pydantic 模型 —— 定义前后端接口的请求体与响应体结构
 """
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -14,10 +15,25 @@ class ExplainScores(BaseModel):
     tag: float = Field(default=0.0)
 
 
+class DimensionDetail(BaseModel):
+    dimension: str = Field(description="维度名称，如：地理位置")
+    detail: str = Field(description="具体说明，如：步行5分钟内")
+    score_impact: Literal["high", "medium", "low"] = Field(description="影响等级")
+
+
+class ReasoningLogic(BaseModel):
+    primary_factor: str = Field(description="首要决策因素")
+    secondary_factor: str = Field(default="", description="次要决策因素")
+
+
 class ExplainData(BaseModel):
     scores: ExplainScores = Field(default_factory=ExplainScores)
     matched_tags: list[str] = Field(default_factory=list)
     reason_hint: list[str] = Field(default_factory=list)
+    summary: str | None = Field(default=None, description="一句话推荐理由")
+    reasoning_logic: ReasoningLogic | None = Field(default=None, description="决策逻辑")
+    dimension_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
+    ai_speech: str | None = Field(default=None, description="AI生成的完整解释话术")
 
 
 class RecommendRequest(BaseModel):
@@ -49,11 +65,39 @@ class RestaurantOut(BaseModel):
     explain: ExplainData | None = Field(default=None, description="结构化解释数据（供 LLM 模块使用）")
 
 
+class StructuredContext(BaseModel):
+    intent_mode: str = Field(description="场景模式描述")
+    core_tags: list[str] = Field(default_factory=list, description="核心关键词")
+    adjusted_weights: dict[str, str] = Field(default_factory=dict, description="调整后的权重说明")
+
+
+class ExplanationSystem(BaseModel):
+    welcome_narrative: str = Field(description="全局意图综述话术")
+    structured_context: StructuredContext = Field(description="结构化意图上下文")
+
+
+# ── 面向前端的公开输出结构 ────────────────────────────────
+
+class ExplanationOut(BaseModel):
+    """面向前端的解释结构，不包含内部评分数据。"""
+    summary: str | None = Field(default=None, description="一句话推荐理由")
+    reasoning_logic: ReasoningLogic | None = Field(default=None, description="决策逻辑")
+    dimension_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
+    ai_speech: str | None = Field(default=None, description="AI生成的完整解释话术")
+
+
+class RecommendationItem(BaseModel):
+    """前端可见的单条推荐结果。"""
+    restaurant_id: str = Field(description="高德POI唯一标识")
+    restaurant_name: str = Field(description="餐馆名称")
+    explanation: ExplanationOut | None = Field(default=None, description="解释结果")
+
+
 class RecommendResponse(BaseModel):
     code: int = Field(default=0, description="状态码 0=成功 1=无结果 -1=异常")
     message: str = Field(default="ok", description="状态说明")
-    data: list[RestaurantOut] = Field(default_factory=list, description="推荐餐馆列表")
-    total: int = Field(default=0, description="结果总数")
+    explanation_system: ExplanationSystem | None = Field(default=None, description="全局解释系统")
+    recommendations: list[RecommendationItem] = Field(default_factory=list, description="推荐餐馆列表")
 
 
 # ── 反馈接口 ──────────────────────────────────────────────

@@ -193,8 +193,8 @@ class IntentParser:
 
         if has_budget:
             # 有预算约束：重心放在"品类最像"+"价格最近"
-            w_tag      = 0.40
-            w_price    = 0.45
+            w_tag      = 0.50
+            w_price    = 0.35
             w_distance = 0.10
             w_rating   = 0.05
         else:
@@ -226,6 +226,7 @@ class IntentParser:
         """工作日（周一至周五）11:00~13:30"""
         return now.weekday() < 5 and dtime(11, 0) <= now.time() <= dtime(13, 30)
 
+    # 意图识别 LLM 调用（单独方法，便于测试和替换实现）
     async def _call_intent_llm(self, user_input: str) -> dict:
         """调用 LLM 完成意图分类，3秒超时，失败返回空字典（降级为 context_only）"""
         if not config.LLM_API_KEY or not config.LLM_API_URL:
