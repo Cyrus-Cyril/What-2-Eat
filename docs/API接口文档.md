@@ -81,56 +81,57 @@ Content-Type: application/json
 }
 ```
 
-**响应体 `data[]` 中每条餐馆的字段：**
+**响应体 `recommendations[]` 中每条餐馆的字段（对前端公开）：**
 
 | 字段 | 类型 | 说明 |
 |------|:----:|------|
 | `restaurant_id` | string | 高德POI唯一标识 |
-| `name` | string | 餐馆名称 |
-| `category` | string | 餐馆类别（如"川菜"） |
-| `distance_m` | int | 距用户距离（米） |
-| `rating` | float | 平台评分 0.0~5.0 |
-| `avg_price` | float | 人均消费（元） |
-| `address` | string | 详细地址 |
-| `latitude` | float | 纬度（GCJ-02） |
-| `longitude` | float | 经度（GCJ-02） |
-| `score` | float | 推荐综合评分 0~1 |
-| `reason` | string | 推荐理由说明 |
+| `restaurant_name` | string | 餐馆名称 |
+| `explanation` | object | 结构化解释（见下 `ExplanationOut`） |
 
-**响应示例：**
+`ExplanationOut`（对前端公开的解释结构）：
+
+| 字段 | 类型 | 说明 |
+|------|:----:|------|
+| `summary` | string|null | 一句话摘要（建议放卡片首行） |
+| `reasoning_logic` | object|null | `primary_factor` / `secondary_factor`（用于展示核心决策点） |
+| `dimension_details` | array | 每维度证据链（`dimension`/`detail`/`score_impact`） |
+| `ai_speech` | string|null | 可选的 LLM 生成话术（详情页使用） |
+
+**重要说明（对前端）：**
+- 后端内部维护的完整解释数据（含 `scores`、`matched_tags`、`reason_hint` 等）属于内部字段，仅用于 LLM prompt、日志或入库，不保证对前端暴露或稳定。前端应仅依赖 `ExplanationOut` 中的字段。
+
+**响应示例（对外最新结构）：**
 ```json
 {
   "code": 0,
   "message": "ok",
-  "data": [
-    {
-      "restaurant_id": "B0012345ABC",
-      "name": "川味轩",
-      "category": "川菜",
-      "distance_m": 350,
-      "rating": 4.5,
-      "avg_price": 45.0,
-      "address": "珞喻路123号",
-      "latitude": 30.5312,
-      "longitude": 114.3621,
-      "score": 0.85,
-          "reason": "距离仅350m,非常近；评分4.5分,口碑好；符合你的\"川菜\"口味偏好；人均¥45",
-          "explain": {
-            "scores": { "distance": 0.68, "price": 0.13, "rating": 0.92, "tag": 0.0 },
-            "matched_tags": [],
-            "reason_hint": ["步行可达","口碑极佳"],
-            "summary": "步行可达的高口碑川菜馆",
-            "reasoning_logic": { "primary_factor": "用户口碑", "secondary_factor": "地理位置" },
-            "dimension_details": [
-              { "dimension": "用户口碑", "detail": "评分 4.5，口碑很好", "score_impact": "high" },
-              { "dimension": "地理位置", "detail": "步行约5分钟", "score_impact": "medium" },
-              { "dimension": "人均价格", "detail": "人均约45元，符合预算", "score_impact": "medium" }
-            ],
-            "ai_speech": null
-          }
+  "explanation_system": {
+    "welcome_narrative": "没问题！我注意到您想找‘30元左右的火锅’。现在为您定制了‘高性价比+近距离’方案。",
+    "structured_context": {
+      "intent_mode": "Scene C - 硬过滤 + 工作日加速",
+      "core_tags": ["火锅","性价比"],
+      "adjusted_weights": { "distance": "0.60", "price": "0.30" }
     }
-  ],
-  "total": 1
+  },
+  "recommendations": [
+    {
+      "restaurant_id": "R002",
+      "restaurant_name": "渝味火锅城",
+      "explanation": {
+        "summary": "评分4.4，口碑较好的中餐厅;火锅",
+        "reasoning_logic": {
+          "primary_factor": "用户口碑：评分4.4，口碑较好",
+          "secondary_factor": "品类匹配：完全符合「火锅」口味"
+        },
+        "dimension_details": [
+          { "dimension": "用户口碑", "detail": "评分4.4，口碑较好", "score_impact": "high" },
+          { "dimension": "品类匹配", "detail": "完全符合「火锅」口味", "score_impact": "high" }
+        ],
+        "ai_speech": "渝味火锅城用户口碑佳，评分4.4，完全符合火锅口味。虽然人均略超预算，但品质值得体验。"
+      }
+    }
+  ]
 }
 ```
 
@@ -152,14 +153,8 @@ Content-Type: application/json
   - `welcome_narrative`：向用户展示的自然语言综述（字符串）
   - `structured_context`：结构化上下文，字段包括 `intent_mode`, `core_tags`, `adjusted_weights`
 
-- `data[][].explain`：每条餐馆的解释信息已由原始的字符串数组扩展为结构化对象（向后兼容）：
-  - `scores`：距离/价格/评分/标签等维度分数
-  - `matched_tags`：命中的标签
-  - `reason_hint`：简短的规则提示（保留原有功能）
-  - `summary`：短句摘要，建议前端放在卡片首行
-  - `reasoning_logic`：`primary_factor` / `secondary_factor`，展示为什么被选中
-  - `dimension_details`：逐维度证据列表（`dimension`/`detail`/`score_impact`）
-  - `ai_speech`：可选的 LLM 生成话术，供详情页使用，若未生成则为 `null`
+- `recommendations[][].explanation`：对前端公开的解释（`ExplanationOut`），只包含 `summary`/`reasoning_logic`/`dimension_details`/`ai_speech`。
+  后端仍保留内部完整的 `explain`（含 `scores`/`matched_tags`/`reason_hint` 等），但这些字段仅用于内部处理、LLM prompt 或入库，不保证对前端暴露或长期稳定，前端应避免依赖这些内部字段。
 
 前端渲染建议：
 - 卡片摘要优先展示 `explain.summary`，次要展示 `reason_hint`；
