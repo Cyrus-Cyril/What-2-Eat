@@ -30,7 +30,7 @@ class ExplainData:
     reason_hint: list[str] = field(default_factory=list)
     summary: str = ""
     reasoning_logic: ReasoningLogicLocal | None = None
-    dimension_details: list[DimensionDetailLocal] = field(default_factory=list)
+    match_details: list[DimensionDetailLocal] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -42,13 +42,13 @@ class ExplainData:
                 "primary_factor": self.reasoning_logic.primary_factor,
                 "secondary_factor": self.reasoning_logic.secondary_factor,
             } if self.reasoning_logic else None,
-            "dimension_details": [
+            "match_details": [
                 {
                     "dimension": d.dimension,
                     "detail": d.detail,
                     "score_impact": d.score_impact,
                 }
-                for d in self.dimension_details
+                for d in self.match_details
             ],
         }
 
@@ -70,7 +70,7 @@ def build_explain(
     根据评分明细生成 ExplainData，包含 dimension_details、reasoning_logic、summary。
     """
     hints: list[str] = []
-    dimension_details: list[DimensionDetailLocal] = []
+    match_details: list[DimensionDetailLocal] = []
 
     distance_m = restaurant.get("distance_m", 0) or 0
     rating = restaurant.get("rating", 0.0) or 0.0
@@ -88,7 +88,7 @@ def build_explain(
         dist_detail = f"距离约{distance_m}米"
 
     dist_impact = _score_impact(score_detail.distance)
-    dimension_details.append(DimensionDetailLocal(
+    match_details.append(DimensionDetailLocal(
         dimension="地理位置",
         detail=dist_detail,
         score_impact=dist_impact,
@@ -105,7 +105,7 @@ def build_explain(
         price_detail = f"人均约{int(avg_price)}元，略超预算"
 
     price_impact = _score_impact(score_detail.price)
-    dimension_details.append(DimensionDetailLocal(
+    match_details.append(DimensionDetailLocal(
         dimension="人均价格",
         detail=price_detail,
         score_impact=price_impact,
@@ -122,7 +122,7 @@ def build_explain(
         rating_detail = f"评分{rating:.1f}，口碑一般"
 
     rating_impact = _score_impact(score_detail.rating)
-    dimension_details.append(DimensionDetailLocal(
+    match_details.append(DimensionDetailLocal(
         dimension="用户口碑",
         detail=rating_detail,
         score_impact=rating_impact,
@@ -134,7 +134,7 @@ def build_explain(
         tag_detail = f"完全符合「{tag_str}」口味"
         hints.append(tag_detail)
         tag_impact: Literal["high", "medium", "low"] = "high" if score_detail.tag >= 0.8 else "medium"
-        dimension_details.append(DimensionDetailLocal(
+        match_details.append(DimensionDetailLocal(
             dimension="品类匹配",
             detail=tag_detail,
             score_impact=tag_impact,
@@ -144,7 +144,7 @@ def build_explain(
 
     # ── reasoning_logic：取 score_impact 排名前两的维度 ──
     _impact_order = {"high": 2, "medium": 1, "low": 0}
-    sorted_dims = sorted(dimension_details, key=lambda d: _impact_order[d.score_impact], reverse=True)
+    sorted_dims = sorted(match_details, key=lambda d: _impact_order[d.score_impact], reverse=True)
 
     reasoning_logic: ReasoningLogicLocal | None = None
     if sorted_dims:
@@ -175,5 +175,5 @@ def build_explain(
         reason_hint=reason_hint,
         summary=summary,
         reasoning_logic=reasoning_logic,
-        dimension_details=dimension_details,
+        match_details=match_details,
     )

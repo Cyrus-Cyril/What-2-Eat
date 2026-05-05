@@ -35,42 +35,52 @@ _SCENE_LABELS: dict[str, str] = {
 # ── 规则模板（fallback） ───────────────────────────────────
 _WELCOME_TEMPLATES: dict[str, str] = {
     "context_only": (
-        "好的！我根据您当前的位置，为您推荐了附近综合评价最佳的餐厅，"
-        "兼顾距离、价格和口碑，希望您用餐愉快！"
+        "好嘞！我扫了一眼你周围，给你挑了几家离得近、口碑不错的餐厅，"
+        "价格也还算实在，应该都合适哈！"
     ),
     "soft_boost": (
-        "明白了！我已根据您的口味偏好，优先筛选出最符合您喜好的餐厅，"
-        "同时兼顾了距离和价格因素，为您定制了这份推荐列表。"
+        "懂你！我按你平时的口味优先给你捞出来了，"
+        "距离和价格也都照顾到了，这几家应该都对你胃口！"
     ),
     "hard_filter": (
-        "好的！我已精准筛选出所有符合您指定品类和预算的餐厅，"
-        "并按综合评分为您排序，请查看以下推荐结果。"
+        "搞定！我已经把符合你要求的都给你筛出来了，"
+        "按综合评分排好序了，几家都挺不错哈！"
     ),
     "hard_filter_fallback": (
-        "抱歉，附近暂时没有完全符合您要求的餐厅。"
-        "不过别担心，我已切换为偏好加权模式，为您推荐最接近您口味的选择。"
+        "哎，附近暂时没找到完全符合要求的……别担心，"
+        "我已经切换模式给你找最接近的了，应该也差不多嘛！"
     ),
 }
 
 # ── LLM Prompt ────────────────────────────────────────────
 _WELCOME_PROMPT_TEMPLATE = """\
-你是一个贴心的美食导览助手。请根据用户本次推荐请求的意图信息，用1-2句自然流畅的中文生成一段"开场白"。
+你是一个有点小幽默、懂吃又懂生活的美食密友。你说话直白坦诚，不讲大道理，更像是在微信上给好朋友发语音推荐餐厅。
+
+【重要】你现在的角色是：已经帮用户找好餐厅了，正在告诉用户"我是怎么帮你找的、找到了什么"。
+你是在向用户介绍推荐结果，不是在问用户问题，也不是在询问用户有什么推荐。
+
+请根据以下意图信息，用1-2句话生成一段轻松的"开场白"，说明你是如何为用户筛选的：
 
 意图信息：
 - 场景模式：{intent_mode}
 - 核心关键词：{core_tags_str}
 - 权重调整：{weights_str}
 - 是否由硬过滤降级：{fallback}
+- 系统调整说明（若非"无"，必须在开场白中坦诚提及）：{relaxation_note}
 
-要求：
-1. 语气亲切自然，像一位了解用户需求的助手。
-2. 必须体现用户的核心诉求（关键词、场景）。
-3. 只输出开场白文本，不要任何JSON或额外解释。
-4. 字数控制在50字以内。\
+语言规则：
+1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
+2. 严禁以问句结尾（不要问用户任何问题）。
+3. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
+4. 若"系统调整说明"非"无"，必须用口语化方式坦白（如"贵了点但值得"、"没火锅就找了个接近的"）。
+5. 只输出开场白文本，不要任何JSON或额外解释。
+6. 字数控制在60字以内。\
 """
 
 _AI_SPEECH_PROMPT_TEMPLATE = """\
-你是一个精明、贴心的美食导览助手。请根据以下餐厅数据，用1-3句话生成推荐理由。
+你是一个有点小幽默、懂吃又懂生活的美食密友。你说话直白坦诚，不讲大道理，更像是在微信上给好朋友发语音推荐餐厅。
+
+请根据以下餐厅数据，用1-3句话生成推荐理由。
 
 餐厅名称：{name}
 主要优势：{primary_factor}
@@ -78,12 +88,13 @@ _AI_SPEECH_PROMPT_TEMPLATE = """\
 各维度详情：
 {dimension_details_str}
 
-生成规则：
-1. 必须包含证据链：每个提到的理由必须来自"score_impact=high"的维度数据。
-2. 若有score_impact=low的维度，必须用"虽然...但是..."句式提及。
-3. 严禁描述数据中不存在的属性（禁止幻觉）。
-4. 语言简洁自然，字数控制在60字以内。
-5. 只输出推荐话术文本，不要任何JSON或额外解释。\
+语言规则：
+1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
+2. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
+3. 情绪化表达：不要说"距离分数高"，要说"这家就在你楼下，懒人必备！"
+4. 坦诚转折：若有score_impact=low的维度，必须用"虽然...但..."句式坦诚提及，不要掩盖。
+5. 每个提到的理由必须来自score_impact=high的维度数据，不得编造不存在的属性。
+6. 字数控制在60字以内，只输出推荐话术，不要任何JSON或额外解释。\
 """
 
 
@@ -139,13 +150,19 @@ async def build_explanation_system(
     intent: IntentAnalysis,
     req_query: str | None,
     result_count: int,
+    relaxation_info: dict | None = None,
 ) -> ExplanationSystem:
     """
     构建全局解释系统：
-    - 规则生成 StructuredContext
-    - LLM（3s 超时）生成 welcome_narrative，失败降级为规则模板
+    - 规则生成 StructuredContext 和 my_logic（松弛策略摘要）
+    - LLM（3s 超时）生成 hello_voice，失败降级为规则模板
+    - 若松弛搜索有坦诚告知内容（如预算放宽），注入 hello_voice
     """
     structured_context = _build_structured_context(intent)
+    my_logic = relaxation_info if relaxation_info else None
+
+    # 松弛告知前缀（坦诚告知用户系统做了哪些调整）
+    relaxation_note = (relaxation_info or {}).get("note", "")
 
     # 构建 LLM prompt
     core_tags_str = "、".join(structured_context.core_tags) if structured_context.core_tags else "无"
@@ -155,35 +172,37 @@ async def build_explanation_system(
         core_tags_str=core_tags_str,
         weights_str=weights_str,
         fallback="是" if intent.fallback_from_hard_filter else "否",
+        relaxation_note=relaxation_note if relaxation_note else "无",
     )
 
-    welcome_narrative = await _call_llm(prompt, timeout=3.0)
+    hello_voice = await _call_llm(prompt, timeout=3.0)
 
     # LLM 失败 → 规则降级
-    if not welcome_narrative:
+    if not hello_voice:
         if intent.fallback_from_hard_filter:
-            welcome_narrative = _WELCOME_TEMPLATES["hard_filter_fallback"]
+            hello_voice = _WELCOME_TEMPLATES["hard_filter_fallback"]
         else:
-            welcome_narrative = _WELCOME_TEMPLATES.get(
+            hello_voice = _WELCOME_TEMPLATES.get(
                 intent.intent_type,
                 _WELCOME_TEMPLATES["context_only"],
             )
 
     return ExplanationSystem(
-        welcome_narrative=welcome_narrative,
+        hello_voice=hello_voice,
         structured_context=structured_context,
+        my_logic=my_logic,
     )
 
 
 async def build_ai_speech(
     restaurant_name: str,
-    dimension_details: list[DimensionDetail],
+    match_details: list[DimensionDetail],
     reasoning_logic: ReasoningLogic | None,
 ) -> str | None:
     """
     为单个餐厅生成 ai_speech（LLM，2s 超时，失败返回 None）。
     """
-    if not dimension_details:
+    if not match_details:
         return None
 
     primary = reasoning_logic.primary_factor if reasoning_logic else ""
@@ -191,7 +210,7 @@ async def build_ai_speech(
 
     details_lines = "\n".join(
         f"  - {d.dimension}：{d.detail}（影响={d.score_impact}）"
-        for d in dimension_details
+        for d in match_details
     )
 
     prompt = _AI_SPEECH_PROMPT_TEMPLATE.format(
@@ -209,12 +228,12 @@ async def build_ai_speeches_for_top_n(
 ) -> list[str | None]:
     """
     并发为 top_n 餐厅生成 ai_speech。
-    restaurants 列表中每项包含：name, dimension_details, reasoning_logic
+    restaurants 列表中每项包含：name, match_details, reasoning_logic
     """
     tasks = [
         build_ai_speech(
             r["name"],
-            r["dimension_details"],
+            r["match_details"],
             r["reasoning_logic"],
         )
         for r in restaurants
