@@ -93,3 +93,32 @@ export function getPersonalizedRecommendations(user) {
     }))
     .sort((left, right) => right.score - left.score)
 }
+
+export function getNearbyNewShops() {
+  return [
+    {
+      id: 'n001',
+      name: '街角砂锅小馆',
+      category: '砂锅',
+      distanceText: '步行约 6 分钟',
+      avgPrice: 32,
+      openingLabel: '新开 5 天',
+    },
+    {
+      id: 'n002',
+      name: '青柠越南粉',
+      category: '越南粉',
+      distanceText: '步行约 9 分钟',
+      avgPrice: 28,
+      openingLabel: '新开 2 周',
+    },
+    {
+      id: 'n003',
+      name: '晚风居酒食堂',
+      category: '居酒屋',
+      distanceText: '骑行约 8 分钟',
+      avgPrice: 68,
+      openingLabel: '试营业',
+    },
+  ]
+}

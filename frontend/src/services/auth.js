@@ -162,3 +162,29 @@ export function logoutUser() {
   authState.currentUser = null
   persistState()
 }
+
+export function updateCurrentUserProfile(payload) {
+  if (!authState.currentUser) {
+    throw new Error('当前没有已登录用户')
+  }
+
+  const updatedUser = {
+    ...authState.currentUser,
+    ...payload,
+    nickname: payload.nickname?.trim() || authState.currentUser.nickname,
+    username: payload.username?.trim() || authState.currentUser.username,
+    age: Number(payload.age) || authState.currentUser.age,
+    budget_preference_min: Number(payload.budget_preference_min),
+    budget_preference_max: Number(payload.budget_preference_max),
+    distance_preference: Number(payload.distance_preference),
+    spicy_preference: Number(payload.spicy_preference),
+    sweet_preference: Number(payload.sweet_preference),
+    healthy_preference: Number(payload.healthy_preference),
+    last_active_time: new Date().toISOString(),
+  }
+
+  authState.users = authState.users.map((user) => (user.id === updatedUser.id ? updatedUser : user))
+  authState.currentUser = updatedUser
+  persistState()
+  return updatedUser
+}

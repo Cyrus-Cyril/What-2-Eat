@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fetchRecommendations } from '@/services/api'
 import { authState, logoutUser } from '@/services/auth'
-import { getPersonalizedRecommendations } from '@/services/personalization'
+import { getNearbyNewShops, getPersonalizedRecommendations } from '@/services/personalization'
 
 const quickIdeas = [
   '想吃热乎一点的',
@@ -43,6 +43,64 @@ const activePersonalizedCard = computed(
   () => personalizedCards.value[carouselIndex.value % Math.max(personalizedCards.value.length, 1)],
 )
 const currentUserTags = computed(() => currentUser.value?.preference_json || [])
+const nearbyNewShops = computed(() => getNearbyNewShops())
+const visibleResponseMessage = computed(() => {
+  if (!responseMessage.value || responseMessage.value === 'ok') {
+    return ''
+  }
+  return responseMessage.value
+})
+const mealTitle = computed(() => {
+  const hour = new Date().getHours()
+
+  if (hour >= 5 && hour < 10) {
+    return '早上吃什么'
+  }
+
+  if (hour >= 10 && hour < 14) {
+    return '中午吃什么'
+  }
+
+  if (hour >= 14 && hour < 21) {
+    return '今晚吃什么'
+  }
+
+  return '夜宵吃什么'
+})
+const mealSubtitle = computed(() => {
+  const hour = new Date().getHours()
+
+  if (hour >= 5 && hour < 10) {
+    return '选好今天早上的口味和预算，看看附近有什么合适的早餐选择。'
+  }
+
+  if (hour >= 10 && hour < 14) {
+    return '选好中午想吃的口味和预算，马上看看这顿午饭去哪里更合适。'
+  }
+
+  if (hour >= 14 && hour < 21) {
+    return '把想吃的口味、预算和人数选好，马上看看今天更适合去哪一家。'
+  }
+
+  return '挑好夜宵想吃的口味和预算，看看现在还有哪些店值得去。'
+})
+const mealEyebrow = computed(() => {
+  const hour = new Date().getHours()
+
+  if (hour >= 5 && hour < 10) {
+    return '早餐时间'
+  }
+
+  if (hour >= 10 && hour < 14) {
+    return '午饭时间'
+  }
+
+  if (hour >= 14 && hour < 21) {
+    return '晚饭时间'
+  }
+
+  return '夜宵时间'
+})
 
 function applyQuickIdea(text) {
   form.query = text
@@ -122,7 +180,7 @@ async function submitRecommendation() {
           <span>@{{ currentUser.username }}</span>
         </div>
         <div class="session-actions">
-          <RouterLink class="secondary-link" to="/auth">编辑资料</RouterLink>
+          <RouterLink class="secondary-link" to="/profile">偏好设置</RouterLink>
           <button class="text-button" type="button" @click="logoutUser">退出登录</button>
         </div>
       </div>
@@ -132,11 +190,9 @@ async function submitRecommendation() {
 
     <section class="consumer-hero">
       <div class="hero-stage">
-        <p class="eyebrow">Smart Dining</p>
-        <h1>今晚吃什么</h1>
-        <p class="hero-lead">
-          说一句你现在想吃什么，我们帮你把距离、预算和口味一起考虑掉，给出一组更像“现在就能去吃”的推荐。
-        </p>
+        <p class="eyebrow">{{ mealEyebrow }}</p>
+        <h1>{{ mealTitle }}</h1>
+        <p class="hero-lead">{{ mealSubtitle }}</p>
 
         <form class="prompt-composer" @submit.prevent="submitRecommendation">
           <label class="prompt-field">
@@ -229,7 +285,7 @@ async function submitRecommendation() {
           <div class="carousel-header">
             <div>
               <p class="card-label">偏好推荐</p>
-              <h2>{{ currentUser ? `${currentUser.nickname} 的历史偏好` : '登录后查看专属推荐' }}</h2>
+              <h2>{{ currentUser ? `${currentUser.nickname} 可能会喜欢` : '登录后查看专属推荐' }}</h2>
             </div>
 
             <div class="carousel-controls">
@@ -260,7 +316,7 @@ async function submitRecommendation() {
               </div>
 
               <div class="profile-brief">
-                <p>历史偏好标签</p>
+                <p>常用偏好</p>
                 <div class="match-chip-row">
                   <span
                     v-for="tag in currentUserTags.slice(0, 4)"
@@ -275,9 +331,31 @@ async function submitRecommendation() {
           </template>
 
           <div v-else class="carousel-empty">
-            <p>登录后会根据你的预算、距离、健康倾向和历史喜好生成专属推荐轮播。</p>
+            <p>登录后可根据你的常用口味、预算和偏好标签生成专属推荐。</p>
             <RouterLink class="primary-link" to="/auth">去登录</RouterLink>
           </div>
+        </article>
+
+        <article class="new-shop-card">
+          <div class="new-shop-header">
+            <div>
+              <p class="card-label">附近新店</p>
+              <h2>这几家最近刚开</h2>
+            </div>
+          </div>
+
+          <ul class="new-shop-list">
+            <li v-for="shop in nearbyNewShops" :key="shop.id" class="new-shop-item">
+              <div>
+                <p class="new-shop-name">{{ shop.name }}</p>
+                <p class="new-shop-meta">{{ shop.category }} · {{ shop.distanceText }}</p>
+              </div>
+              <div class="new-shop-side">
+                <span class="new-badge">{{ shop.openingLabel }}</span>
+                <span class="new-shop-price">¥{{ shop.avgPrice }}</span>
+              </div>
+            </li>
+          </ul>
         </article>
       </aside>
     </section>
@@ -288,18 +366,17 @@ async function submitRecommendation() {
           <p class="eyebrow">Recommendations</p>
           <h2>现在适合你的选择</h2>
         </div>
-        <p class="results-tip">优先展示后端返回的解释摘要，让主界面更接近真实用户体验。</p>
       </div>
 
       <div v-if="errorMessage" class="feedback-block feedback-error">
         {{ errorMessage }}
       </div>
 
-      <div v-else-if="responseMessage && !hasResults" class="feedback-block feedback-info">
-        {{ responseMessage }}
+      <div v-else-if="visibleResponseMessage && !hasResults" class="feedback-block feedback-info">
+        {{ visibleResponseMessage }}
       </div>
 
-      <article v-if="explanationSystem" class="narrative-banner">
+      <article v-if="explanationSystem?.welcome_narrative" class="narrative-banner">
         <p class="card-label">推荐综述</p>
         <h3>{{ explanationSystem.welcome_narrative }}</h3>
       </article>
@@ -316,7 +393,7 @@ async function submitRecommendation() {
           </div>
 
           <p class="consumer-summary">
-            {{ item.explanation?.summary || '后端暂未提供摘要说明。' }}
+            {{ item.explanation?.summary || '这家店已经加入本次推荐列表。' }}
           </p>
 
           <div v-if="item.explanation?.reasoning_logic" class="reason-pair">
@@ -326,7 +403,7 @@ async function submitRecommendation() {
             </div>
             <div>
               <span>补充原因</span>
-              <strong>{{ item.explanation.reasoning_logic.secondary_factor || '未提供' }}</strong>
+              <strong>{{ item.explanation.reasoning_logic.secondary_factor || '店铺信息已更新' }}</strong>
             </div>
           </div>
 
@@ -346,8 +423,8 @@ async function submitRecommendation() {
       </div>
 
       <div v-else class="consumer-empty">
-        <h3>先描述一下你现在想吃什么</h3>
-        <p>例如“想吃便宜一点的热饭”或者“今晚两个人想吃火锅”，系统就会开始推荐。</p>
+        <h3>先选好今天的口味和预算</h3>
+        <p>选好条件后就能开始查看今天更适合去吃的店。</p>
       </div>
     </section>
   </main>
