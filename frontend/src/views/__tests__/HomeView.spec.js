@@ -6,7 +6,7 @@ vi.mock('@/services/api', () => ({
   fetchRecommendations: vi.fn().mockResolvedValue({
     message: 'ok',
     explanation_system: {
-      welcome_narrative: '已根据你的需求生成推荐。',
+      welcome_narrative: '今晚可以优先看看这几家。',
       structured_context: {
         intent_mode: 'Scene B',
         core_tags: ['川菜'],
@@ -60,10 +60,20 @@ vi.mock('@/services/personalization', () => ({
       reason: '麻辣风味稳定，适合朋友一起吃。',
     },
   ],
+  getNearbyNewShops: () => [
+    {
+      id: 'n001',
+      name: '街角砂锅小馆',
+      category: '砂锅',
+      distanceText: '步行约 6 分钟',
+      avgPrice: 32,
+      openingLabel: '新开 5 天',
+    },
+  ],
 }))
 
 describe('HomeView', () => {
-  it('renders consumer recommendations after submit', async () => {
+  it('renders user-facing homepage sections after submit', async () => {
     const wrapper = mount(HomeView, {
       global: {
         stubs: ['RouterLink'],
@@ -74,8 +84,9 @@ describe('HomeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('今晚吃什么')
-    expect(wrapper.text()).toContain('川香小馆')
     expect(wrapper.text()).toContain('渝味火锅城')
-    expect(wrapper.text()).toContain('已根据你的需求生成推荐。')
+    expect(wrapper.text()).toContain('街角砂锅小馆')
+    expect(wrapper.text()).toContain('川香小馆')
+    expect(wrapper.text()).not.toContain('ok')
   })
 })
