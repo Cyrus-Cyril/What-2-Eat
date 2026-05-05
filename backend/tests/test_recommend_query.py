@@ -39,7 +39,7 @@ def test_recommend_with_query():
             # 验证 explanation 公开字段（不含内部评分数据）
             explanation = item.get("explanation")
             if explanation:
-                assert "dimension_details" in explanation, explanation
+                assert "match_details" in explanation, explanation
                 assert "summary" in explanation, explanation
                 assert "reasoning_logic" in explanation, explanation
                 # 确认内部字段不暴露给前端
@@ -50,8 +50,8 @@ def test_recommend_with_query():
         # 验证全局解释系统
         explanation_system = data.get("explanation_system")
         assert explanation_system is not None, "响应中缺少 explanation_system 字段"
-        assert "welcome_narrative" in explanation_system, explanation_system
-        assert explanation_system["welcome_narrative"], "welcome_narrative 不能为空"
+        assert "hello_voice" in explanation_system, explanation_system
+        assert explanation_system["hello_voice"], "hello_voice 不能为空"
         assert "structured_context" in explanation_system, explanation_system
 
         sc = explanation_system["structured_context"]

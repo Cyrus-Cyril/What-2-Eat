@@ -13,12 +13,13 @@ from app.services.data_entry import get_candidate_restaurants
 from app.services.scorer import calc_all
 from app.services.explainer import build_explain
 from app.services.user_profile import get_user_profile
-from app.services.tag_mapper import get_tags
+from app.services.tag_mapper import get_tags, get_parent_tags
 from app.services.intent_parser import intent_parser
 from app.services.explanation_builder import build_explanation_system, build_ai_speeches_for_top_n
 from app.models.schemas import (
     RecommendRequest, RecommendResponse, RestaurantOut,
     ExplainData, ExplainScores, DimensionDetail, ReasoningLogic,
+    ExplanationOut, RecommendationItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,21 +71,21 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     if not raw_restaurants:
         return RecommendResponse(code=1, message="附近暂未找到餐馆，请扩大搜索范围")
 
-    # Step 3: Scene C 硬过滤 —— 先剔除不符合标签或超出价格上限的候选
+    # Step 3: Scene C 迭代松弛搜索
+    # 替换原来的"一刀切"硬过滤，采用四步迭代策略：
+    #   Step 1 严格匹配 → Step 2 预算浮动+20% → Step 3 品类语义泛化 → Step 4 完全降级
+    # 同时返回 relaxation_info（记录本次搜索策略），传入解释系统生成 my_logic 字段
+    relaxation_info: dict = {}
     if intent.intent_type == "hard_filter":
-        filtered = _apply_hard_filter(raw_restaurants, intent.filter_tags, intent.filter_budget_max)
-        if not filtered:
-            # 硬过滤后无结果 → 交由 intent_parser 将硬约束降级为软增强权重
-            intent = intent_parser.downgrade_to_soft_boost(intent)
-            weights = {
-                "w_distance": intent.w_distance,
-                "w_price":    intent.w_price,
-                "w_rating":   intent.w_rating,
-                "w_tag":      intent.w_tag,
-            }
-        else:
-            raw_restaurants = filtered
-            logger.info("硬过滤：%d 条候选保留", len(filtered))
+        raw_restaurants, relaxation_info, intent = _iterative_relaxation_search(
+            raw_restaurants, intent, min_count=3
+        )
+        weights = {
+            "w_distance": intent.w_distance,
+            "w_price":    intent.w_price,
+            "w_rating":   intent.w_rating,
+            "w_tag":      intent.w_tag,
+        }
 
     # Step 4~5: 打分 + 生成 explain
     # 说明：
@@ -96,8 +97,33 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     results: list[RestaurantOut] = []
 
     for r in raw_restaurants:
-        # 1) 计算评分明细。返回 ScoreDetail，包含 distance/price/rating/tag/final 等字段
-        score_detail = calc_all(r, req, user_tag_prefs, weights=weights)
+        # 计算本餐厅在松弛搜索中的惩罚系数：
+        #   - level 1（预算浮动）：超出原始预算上限的餐厅乘以 0.7
+        #   - level 2（品类泛化）：仅命中父级标签（非原始标签）的餐厅乘以 0.3
+        penalty_factor = 1.0
+        orig_budget = relaxation_info.get("original_budget_max")
+        orig_tags = relaxation_info.get("original_filter_tags", [])
+
+        if relaxation_info.get("budget_relaxed") and orig_budget is not None:
+            price = r.get("avg_price", 0) or 0
+            if price > orig_budget:
+                # 缓冲区内线性惩罚：溢出越多，惩罚越重（最低 0.5）
+                overage_ratio = min(1.0, (price - orig_budget) / (orig_budget * 0.20))
+                penalty_factor *= max(0.5, 1.0 - overage_ratio * 0.5)
+
+        if relaxation_info.get("tags_generalized") and orig_tags:
+            r_tags = get_tags(r.get("category", "") or "")
+            if not any(ft in r_tags for ft in orig_tags):
+                # 品类仅为泛化匹配（非精确命中），强惩罚确保其排名低于精确匹配
+                penalty_factor *= 0.3
+
+        # 1) 计算评分明细（含 penalty_factor 和 soft-clipping 参数）
+        score_detail = calc_all(
+            r, req, user_tag_prefs,
+            weights=weights,
+            penalty_factor=penalty_factor,
+            filter_budget_max=orig_budget,
+        )
 
         # 2) 基于评分明细生成结构化解释（规则层）
         #    该函数返回本模块内部的 ExplainData dataclass（不是 Pydantic），包含用于生成自然语言的证据链
@@ -118,7 +144,7 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
                 detail=d.detail,
                 score_impact=d.score_impact,
             )
-            for d in explain_obj.dimension_details
+            for d in explain_obj.match_details
         ]
 
         rl = explain_obj.reasoning_logic
@@ -137,7 +163,7 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
             reason_hint=explain_obj.reason_hint,
             summary=explain_obj.summary or None,
             reasoning_logic=reasoning_logic_pydantic,
-            dimension_details=dim_details_pydantic,
+            match_details=dim_details_pydantic,
         )
 
         # 6) 将打分与解释注入到内部返回对象 RestaurantOut（包含完整数据，供内部使用与写库）
@@ -167,14 +193,14 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     speech_inputs = [
         {
             "name": r.name,
-            "dimension_details": r.explain.dimension_details if r.explain else [],
+            "match_details": r.explain.match_details if r.explain else [],
             "reasoning_logic": r.explain.reasoning_logic if r.explain else None,
         }
         for r in top_n
     ]
 
     explanation_system, ai_speeches = await asyncio.gather(
-        build_explanation_system(intent, req.query, len(top_n)),
+        build_explanation_system(intent, req.query, len(top_n), relaxation_info),
         build_ai_speeches_for_top_n(speech_inputs),
     )
 
@@ -187,39 +213,123 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     if req.user_id:
         asyncio.ensure_future(_write_to_db(req, top_n))
 
+    # Step 9: 将内部 RestaurantOut 映射为前端公开的 RecommendationItem（剥离内部字段）
+    recommendation_items = [
+        RecommendationItem(
+            restaurant_id=r.restaurant_id,
+            restaurant_name=r.name,
+            explanation=ExplanationOut(
+                summary=r.explain.summary if r.explain else None,
+                reasoning_logic=r.explain.reasoning_logic if r.explain else None,
+                match_details=r.explain.match_details if r.explain else [],
+                ai_speech=r.explain.ai_speech if r.explain else None,
+            ) if r.explain else None,
+        )
+        for r in top_n
+    ]
+
     logger.info("推荐完成 候选=%d 返回=%d", len(results), len(top_n))
     return RecommendResponse(
         code=0,
-        data=top_n,
-        total=len(top_n),
         explanation_system=explanation_system,
+        recommendations=recommendation_items,
     )
 
 
-def _apply_hard_filter(
+def _apply_filter(
     candidates: list[dict],
     filter_tags: list[str],
-    filter_budget_max: float | None,
+    budget_max: float | None,
 ) -> list[dict]:
     """
-    Scene C 硬过滤：
-    - filter_tags 不为空时，保留餐厅标签与 filter_tags 有交集的候选
-    - filter_budget_max 不为 None 时，排除均价超过上限的候选（均价为 0 视为未知，保留）
+    基础过滤器：按标签列表（有交集即保留）和预算上限过滤候选餐厅。
     """
     result = []
     for r in candidates:
-        # 标签过滤
         if filter_tags:
             r_tags = get_tags(r.get("category", "") or "")
             if not any(ft in r_tags for ft in filter_tags):
                 continue
-        # 价格过滤
-        if filter_budget_max is not None:
+        if budget_max is not None:
             avg_price = r.get("avg_price", 0) or 0
-            if avg_price > 0 and avg_price > filter_budget_max:
+            if avg_price > 0 and avg_price > budget_max:
                 continue
         result.append(r)
     return result
+
+
+def _iterative_relaxation_search(
+    raw_restaurants: list[dict],
+    intent,
+    min_count: int = 3,
+) -> tuple[list[dict], dict, object]:
+    """
+    迭代松弛搜索（Scene C 专用）：
+      Step 1 - 严格匹配：全部 filter_tags + filter_budget_max
+      Step 2 - 预算浮动：保持品类，预算上限 +20%
+      Step 3 - 语义泛化：品类扩展到父级（如 火锅→川菜/中餐）
+      Step 4 - 完全降级：调用 downgrade_to_soft_boost，转为软增强
+
+    返回：(候选餐厅列表, relaxation_info, 更新后的 intent)
+    relaxation_info 包含本次策略摘要，用于生成 my_logic 和 hello_voice 坦白告知。
+    """
+    filter_tags = intent.filter_tags[:]
+    budget_max = intent.filter_budget_max
+
+    relaxation_info: dict = {
+        "level": 0,
+        "original_filter_tags": filter_tags[:],
+        "original_budget_max": budget_max,
+        "budget_relaxed": False,
+        "tags_generalized": False,
+        "downgraded": False,
+        "note": "严格匹配所有条件",
+    }
+
+    # Step 1: 严格匹配
+    candidates = _apply_filter(raw_restaurants, filter_tags, budget_max)
+    logger.info("松弛搜索 Step 1 严格匹配：%d 条", len(candidates))
+    if len(candidates) >= min_count:
+        return candidates, relaxation_info, intent
+
+    # Step 2: 预算浮动 +20%
+    if budget_max is not None:
+        relaxed_budget = round(budget_max * 1.20, 1)
+        candidates = _apply_filter(raw_restaurants, filter_tags, relaxed_budget)
+        logger.info("松弛搜索 Step 2 预算浮动 %.0f→%.0f：%d 条", budget_max, relaxed_budget, len(candidates))
+        if len(candidates) >= min_count:
+            relaxation_info.update({
+                "level": 1,
+                "budget_relaxed": True,
+                "relaxed_budget_max": relaxed_budget,
+                "note": f"预算从{int(budget_max)}元放宽至{int(relaxed_budget)}元（+20%），稍微贵了一点点",
+            })
+            return candidates, relaxation_info, intent
+
+    # Step 3: 语义泛化（品类扩展到父级标签）
+    if filter_tags:
+        parent_tags = get_parent_tags(filter_tags)
+        if parent_tags:
+            candidates = _apply_filter(raw_restaurants, parent_tags, budget_max)
+            logger.info("松弛搜索 Step 3 品类泛化 %s→%s：%d 条", filter_tags, parent_tags, len(candidates))
+            if len(candidates) >= min_count:
+                relaxation_info.update({
+                    "level": 2,
+                    "tags_generalized": True,
+                    "generalized_tags": parent_tags,
+                    "note": f"附近「{'、'.join(filter_tags)}」太少了，帮你扩展到了「{'、'.join(parent_tags)}」",
+                })
+                return candidates, relaxation_info, intent
+
+    # Step 4: 完全降级为 soft_boost
+    intent = intent_parser.downgrade_to_soft_boost(intent)
+    relaxation_info.update({
+        "level": 3,
+        "downgraded": True,
+        "note": "附近实在没有完全符合的，已切换为偏好推荐模式",
+    })
+    logger.info("松弛搜索 Step 4 完全降级，返回全部候选")
+    return raw_restaurants, relaxation_info, intent
 
 
 async def _write_to_db(req: RecommendRequest, results: list[RestaurantOut]) -> None:
