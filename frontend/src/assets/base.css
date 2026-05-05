@@ -1,0 +1,56 @@
+:root {
+  --page-background:
+    radial-gradient(circle at top, rgba(255, 175, 95, 0.2), transparent 28%),
+    linear-gradient(180deg, #fff8ef 0%, #f7efe5 52%, #f4eadc 100%);
+  --panel-background: rgba(255, 252, 247, 0.88);
+  --text-strong: #2d2017;
+  --text-muted: #715b4c;
+  --accent: #e16f29;
+  --accent-deep: #b84a15;
+  --border-soft: rgba(145, 103, 69, 0.18);
+  --border-strong: rgba(145, 103, 69, 0.26);
+  --success: #237e52;
+  --danger: #a5321c;
+  --shadow-soft: 0 24px 48px rgba(125, 82, 45, 0.12);
+  font-family:
+    'Noto Sans SC',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Segoe UI',
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-strong);
+  background: var(--page-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--page-background);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}

@@ -269,7 +269,7 @@ const res = await fetch('http://localhost:8000/api/recommend', {
   })
 });
 const data = await res.json();
-console.log(data.data);  // 推荐列表
+console.log(data.recommendations);  // 推荐列表
 ```
 
 ---
