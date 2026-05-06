@@ -16,6 +16,7 @@ from app.services.user_profile import get_user_profile
 from app.services.tag_mapper import get_tags, get_parent_tags
 from app.services.intent_parser import intent_parser
 from app.services.explanation_builder import build_explanation_system, build_ai_speeches_for_top_n
+from app.db.crud import get_user_blacklist, get_recent_feedback_context
 from app.models.schemas import (
     RecommendRequest, RecommendResponse, RestaurantOut,
     ExplainData, ExplainScores, DimensionDetail, ReasoningLogic,
@@ -49,12 +50,18 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
         intent.w_distance, intent.w_price, intent.w_rating, intent.w_tag,
     )
 
-    # Step 1: 获取用户历史偏好
+    # Step 1: 获取用户历史偏好 + 黑名单 + 反馈上下文
     # 因为现在并没有用户模型，所以这一部分依旧待定
     user_tag_prefs: dict = {}
+    blacklist: set[str] = set()
+    recent_feedback_context: dict = {}
     if req.user_id:
         profile = await get_user_profile(req.user_id)
         user_tag_prefs = profile.get("tag_preferences", {})
+        blacklist = set(await get_user_blacklist(req.user_id, hours=24))
+        recent_feedback_context = await get_recent_feedback_context(req.user_id)
+        if blacklist:
+            logger.info("黑名单过滤 user=%s count=%d", req.user_id, len(blacklist))
 
     # Step 2: 获取候选餐厅
     try:
@@ -70,6 +77,12 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
 
     if not raw_restaurants:
         return RecommendResponse(code=1, message="附近暂未找到餐馆，请扩大搜索范围")
+
+    # 过滤 24h 黑名单（踩过的餐厅本次不推荐）
+    if blacklist:
+        raw_restaurants = [r for r in raw_restaurants if r.get("restaurant_id", "") not in blacklist]
+    if not raw_restaurants:
+        return RecommendResponse(code=1, message="附近餐馆已被您排除，请调整筛选条件或稍后再试")
 
     # Step 3: Scene C 迭代松弛搜索
     # 替换原来的"一刀切"硬过滤，采用四步迭代策略：
@@ -200,7 +213,7 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     ]
 
     explanation_system, ai_speeches = await asyncio.gather(
-        build_explanation_system(intent, req.query, len(top_n), relaxation_info),
+        build_explanation_system(intent, req.query, len(top_n), relaxation_info, recent_feedback_context),
         build_ai_speeches_for_top_n(speech_inputs),
     )
 

@@ -67,14 +67,16 @@ _WELCOME_PROMPT_TEMPLATE = """\
 - 权重调整：{weights_str}
 - 是否由硬过滤降级：{fallback}
 - 系统调整说明（若非"无"，必须在开场白中坦诚提及）：{relaxation_note}
+- 用户近期偏好上下文（若非"无"，可自然融入一句话）：{feedback_note}
 
 语言规则：
 1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
 2. 严禁以问句结尾（不要问用户任何问题）。
 3. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
 4. 若"系统调整说明"非"无"，必须用口语化方式坦白（如"贵了点但值得"、"没火锅就找了个接近的"）。
-5. 只输出开场白文本，不要任何JSON或额外解释。
-6. 字数控制在60字以内。\
+5. 若"用户近期偏好上下文"非"无"，可在开场白中自然融入（如"你之前赞过川菜，这次我特意多找了几家"）。
+6. 只输出开场白文本，不要任何JSON或额外解释。
+7. 字数控制在70字以内。\
 """
 
 _AI_SPEECH_PROMPT_TEMPLATE = """\
@@ -146,23 +148,45 @@ def _build_structured_context(
     )
 
 
+def _build_feedback_note(ctx: dict | None) -> str:
+    """
+    将近期反馈上下文（liked_tags / disliked_tags）转为一句人类可读的提示，
+    注入 LLM prompt 的 {feedback_note} 占位符。
+    """
+    if not ctx:
+        return ""
+    liked = ctx.get("liked_tags", [])
+    disliked = ctx.get("disliked_tags", [])
+    parts: list[str] = []
+    if liked:
+        parts.append(f"用户最近赞过「{'、'.join(liked[:3])}」")
+    if disliked:
+        parts.append(f"用户不太想吃「{'、'.join(disliked[:3])}」（已避开）")
+    return "；".join(parts)
+
+
 async def build_explanation_system(
     intent: IntentAnalysis,
     req_query: str | None,
     result_count: int,
     relaxation_info: dict | None = None,
+    recent_feedback_context: dict | None = None,
 ) -> ExplanationSystem:
     """
     构建全局解释系统：
     - 规则生成 StructuredContext 和 my_logic（松弛策略摘要）
     - LLM（3s 超时）生成 hello_voice，失败降级为规则模板
     - 若松弛搜索有坦诚告知内容（如预算放宽），注入 hello_voice
+    - 若用户有近期反馈（LIKE/DISLIKE），在 hello_voice 中自然提及
     """
     structured_context = _build_structured_context(intent)
     my_logic = relaxation_info if relaxation_info else None
 
     # 松弛告知前缀（坦诚告知用户系统做了哪些调整）
     relaxation_note = (relaxation_info or {}).get("note", "")
+
+    # 近期反馈上下文摘要
+    feedback_note = _build_feedback_note(recent_feedback_context)
 
     # 构建 LLM prompt
     core_tags_str = "、".join(structured_context.core_tags) if structured_context.core_tags else "无"
@@ -173,6 +197,7 @@ async def build_explanation_system(
         weights_str=weights_str,
         fallback="是" if intent.fallback_from_hard_filter else "否",
         relaxation_note=relaxation_note if relaxation_note else "无",
+        feedback_note=feedback_note if feedback_note else "无",
     )
 
     hello_voice = await _call_llm(prompt, timeout=3.0)

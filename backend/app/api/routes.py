@@ -4,7 +4,7 @@ API 路由 —— 所有前后端交互接口的入口
 """
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from app.models.schemas import (
     RecommendRequest, RecommendResponse,
@@ -15,7 +15,7 @@ from app.models.schemas import (
 from app.services.intent_parser import intent_parser
 from app.services.recommender import recommend_async
 from app.services.user_profile import update_preference_from_feedback
-from app.db.crud import save_feedback, get_history
+from app.db.crud import save_feedback, save_interaction, get_history
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -39,11 +39,21 @@ async def get_recommendation(req: RecommendRequest):
 
 
 @router.post("/feedback", response_model=FeedbackResponse, tags=["反馈"])
-async def submit_feedback(req: FeedbackRequest):
+async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTasks):
+    # 从 action_type 或 rating 推导最终 action
+    action_type = req.action_type
+    if action_type is None:
+        if req.rating >= 4:
+            action_type = "LIKE"
+        elif req.rating <= 2:
+            action_type = "DISLIKE"
+
     logger.info(
-        "收到反馈 user=%s restaurant=%s rating=%d chosen=%s",
-        req.user_id, req.restaurant_id, req.rating, req.chosen,
+        "收到反馈 user=%s restaurant=%s action=%s rating=%d chosen=%s",
+        req.user_id, req.restaurant_id, action_type, req.rating, req.chosen,
     )
+
+    # 立即写反馈表（同步，轻量）
     await save_feedback(
         user_id=req.user_id,
         recommendation_id=req.recommendation_id,
@@ -51,9 +61,20 @@ async def submit_feedback(req: FeedbackRequest):
         rating=req.rating,
         chosen=req.chosen,
     )
-    # 触发偏好更新
-    if req.chosen:
-        await update_preference_from_feedback(req.user_id, req.restaurant_id, req.rating)
+
+    # 写 interaction 表（显式表态记录，用于黑名单查询）
+    if action_type in ("LIKE", "DISLIKE"):
+        await save_interaction(req.user_id, req.restaurant_id, action_type)
+
+    # 偏好更新：异步后台执行，不阻塞响应
+    if action_type in ("LIKE", "DISLIKE"):
+        background_tasks.add_task(
+            update_preference_from_feedback,
+            req.user_id,
+            req.restaurant_id,
+            action_type,
+        )
+
     return FeedbackResponse(code=0, message="反馈已记录")
 
 
