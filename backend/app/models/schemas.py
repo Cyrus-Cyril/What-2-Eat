@@ -32,7 +32,7 @@ class ExplainData(BaseModel):
     reason_hint: list[str] = Field(default_factory=list)
     summary: str | None = Field(default=None, description="一句话推荐理由")
     reasoning_logic: ReasoningLogic | None = Field(default=None, description="决策逻辑")
-    dimension_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
+    match_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
     ai_speech: str | None = Field(default=None, description="AI生成的完整解释话术")
 
 
@@ -72,8 +72,9 @@ class StructuredContext(BaseModel):
 
 
 class ExplanationSystem(BaseModel):
-    welcome_narrative: str = Field(description="全局意图综述话术")
+    hello_voice: str = Field(description="全局意图综述话术")
     structured_context: StructuredContext = Field(description="结构化意图上下文")
+    my_logic: dict | None = Field(default=None, description="推荐引擎执行的松弛策略（仅供前端调试/AI参考）")
 
 
 # ── 面向前端的公开输出结构 ────────────────────────────────
@@ -82,7 +83,7 @@ class ExplanationOut(BaseModel):
     """面向前端的解释结构，不包含内部评分数据。"""
     summary: str | None = Field(default=None, description="一句话推荐理由")
     reasoning_logic: ReasoningLogic | None = Field(default=None, description="决策逻辑")
-    dimension_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
+    match_details: list[DimensionDetail] = Field(default_factory=list, description="各维度评分解释")
     ai_speech: str | None = Field(default=None, description="AI生成的完整解释话术")
 
 
