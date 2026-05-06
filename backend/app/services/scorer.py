@@ -40,6 +40,8 @@ def calc_all(
     req: RecommendRequest,
     user_tag_preferences: dict[str, float] | None = None,
     weights: dict[str, float] | None = None,
+    penalty_factor: float = 1.0,
+    filter_budget_max: float | None = None,
 ) -> ScoreDetail:
     """
     计算单个餐厅的完整评分。
@@ -48,6 +50,10 @@ def calc_all(
     weights: 动态权重字典，由 IntentAnalysis 传入（可选）。
         键：w_distance, w_price, w_rating, w_tag
         未提供时使用模块级默认值。
+    penalty_factor: 乘法惩罚系数（0~1），用于松弛搜索中对边界外餐厅的降权。
+        默认 1.0 表示不惩罚；松弛搜索时对预算溢出或品类泛化的餐厅降至 0.3~0.8。
+    filter_budget_max: 原始硬筛选预算上限（元），用于软截断（soft-clipping）。
+        当餐厅均价超出此值但在 10% 缓冲区内时，价格分线性衰减。
     """
     detail = ScoreDetail()
 
@@ -118,6 +124,17 @@ def calc_all(
         total_pref = sum(combined_prefs.values()) or 1.0
         detail.tag = min(1.0, matched_score / total_pref)
 
+    # ── 价格软截断 (Soft-Clipping)：仅在松弛搜索时启用 ─────────────
+    # 当提供了原始硬筛选预算上限且餐厅价格超出时，在缓冲区（0~10%）内线性衰减价格分
+    if filter_budget_max is not None and price > 0:
+        buffer_top = filter_budget_max * 1.10
+        if price > filter_budget_max:
+            if price <= buffer_top:
+                # 缓冲区内：价格分线性从原始值衰减至 0.5
+                overage_ratio = (price - filter_budget_max) / (filter_budget_max * 0.10)
+                detail.price = detail.price * (1.0 - overage_ratio * 0.5)
+            # 超出缓冲区的情况已由迭代松弛搜索剔除，此处不再处理
+
     # ── 最终综合评分 ──────────────────────────────────────────────────
     wd = (weights or {}).get("w_distance", W_DISTANCE)
     wp = (weights or {}).get("w_price",    W_PRICE)
@@ -129,6 +146,6 @@ def calc_all(
         + wp * detail.price
         + wr * detail.rating
         + wt * detail.tag
-    )
+    ) * penalty_factor  # 乘以惩罚系数（品类泛化/预算溢出时降权）
 
     return detail

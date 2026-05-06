@@ -95,7 +95,7 @@ Content-Type: application/json
 |------|:----:|------|
 | `summary` | string|null | 一句话摘要（建议放卡片首行） |
 | `reasoning_logic` | object|null | `primary_factor` / `secondary_factor`（用于展示核心决策点） |
-| `dimension_details` | array | 每维度证据链（`dimension`/`detail`/`score_impact`） |
+| `match_details` | array | 每维度证据链（`dimension`/`detail`/`score_impact`） |
 | `ai_speech` | string|null | 可选的 LLM 生成话术（详情页使用） |
 
 **重要说明（对前端）：**
@@ -107,28 +107,39 @@ Content-Type: application/json
   "code": 0,
   "message": "ok",
   "explanation_system": {
-    "welcome_narrative": "没问题！我注意到您想找‘30元左右的火锅’。现在为您定制了‘高性价比+近距离’方案。",
+    "hello_voice": "给你找了个火锅店，附近火锅不多，就扩到中餐川菜辣的啦，味道应该不赖哈！",
     "structured_context": {
-      "intent_mode": "Scene C - 硬过滤 + 工作日加速",
-      "core_tags": ["火锅","性价比"],
-      "adjusted_weights": { "distance": "0.60", "price": "0.30" }
+      "intent_mode": "Scene C - 精准品类筛选",
+      "core_tags": ["火锅"],
+      "adjusted_weights": { "distance": "0.30", "price": "0.25", "rating": "0.25", "tag": "0.20" }
+    },
+    "my_logic": {
+      "level": 2,
+      "original_filter_tags": ["火锅"],
+      "original_budget_max": 70,
+      "budget_relaxed": false,
+      "tags_generalized": true,
+      "downgraded": false,
+      "note": "附近「火锅」太少了，帮你扩展到了「中餐、川菜、辣」",
+      "generalized_tags": ["中餐","川菜","辣"]
     }
   },
   "recommendations": [
     {
-      "restaurant_id": "R002",
-      "restaurant_name": "渝味火锅城",
+      "restaurant_id": "R009",
+      "restaurant_name": "素食轩",
       "explanation": {
-        "summary": "评分4.4，口碑较好的中餐厅;火锅",
+        "summary": "人均约35元，非常合适的中餐厅;素食",
         "reasoning_logic": {
-          "primary_factor": "用户口碑：评分4.4，口碑较好",
-          "secondary_factor": "品类匹配：完全符合「火锅」口味"
+          "primary_factor": "人均价格：人均约35元，非常合适",
+          "secondary_factor": "用户口碑：评分4.1，口碑较好"
         },
-        "dimension_details": [
-          { "dimension": "用户口碑", "detail": "评分4.4，口碑较好", "score_impact": "high" },
-          { "dimension": "品类匹配", "detail": "完全符合「火锅」口味", "score_impact": "high" }
+        "match_details": [
+          { "dimension": "地理位置", "detail": "步行可达", "score_impact": "low" },
+          { "dimension": "人均价格", "detail": "人均约35元，非常合适", "score_impact": "high" },
+          { "dimension": "用户口碑", "detail": "评分4.1，口碑较好", "score_impact": "high" }
         ],
-        "ai_speech": "渝味火锅城用户口碑佳，评分4.4，完全符合火锅口味。虽然人均略超预算，但品质值得体验。"
+        "ai_speech": "素食轩哈，人均35块真香，评分4.1口碑稳！虽然位置一般咯，但性价比拉满吧！"
       }
     }
   ]
@@ -149,16 +160,17 @@ Content-Type: application/json
 
 从 2026-05-04 起，推荐接口支持可选的解释系统返回，前端可通过 `RecommendResponse` 的 `explanation_system` 字段开启/解析：
 
-- `explanation_system`（可选）：全局意图综述，包含：
-  - `welcome_narrative`：向用户展示的自然语言综述（字符串）
-  - `structured_context`：结构化上下文，字段包括 `intent_mode`, `core_tags`, `adjusted_weights`
+ - `explanation_system`（可选）：全局意图综述，包含：
+   - `hello_voice`：向用户展示的自然语言综述（字符串），面向前端展示（非内部 prompt 字段名）
+   - `structured_context`：结构化上下文，字段包括 `intent_mode`, `core_tags`, `adjusted_weights`
+   - `my_logic`：可选的松弛/降级策略摘要（对象），用于前端显示系统在筛选过程中所做的放宽或泛化说明
 
-- `recommendations[][].explanation`：对前端公开的解释（`ExplanationOut`），只包含 `summary`/`reasoning_logic`/`dimension_details`/`ai_speech`。
+ - `recommendations[][].explanation`：对前端公开的解释（`ExplanationOut`），只包含 `summary`/`reasoning_logic`/`match_details`/`ai_speech`。
   后端仍保留内部完整的 `explain`（含 `scores`/`matched_tags`/`reason_hint` 等），但这些字段仅用于内部处理、LLM prompt 或入库，不保证对前端暴露或长期稳定，前端应避免依赖这些内部字段。
 
 前端渲染建议：
 - 卡片摘要优先展示 `explain.summary`，次要展示 `reason_hint`；
-- 详情弹窗展示 `dimension_details` 的证据链，并在可用时展示 `ai_speech`；
+ - 详情弹窗展示 `match_details` 的证据链，并在可用时展示 `ai_speech`；
 - 若 `explanation_system.structured_context.fallback_from_hard_filter` 为真，展示相应提示说明系统已将硬过滤降级为软增强。
 
 ### 3.3 提交用餐反馈
