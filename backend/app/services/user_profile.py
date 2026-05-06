@@ -13,8 +13,11 @@ from app.db.orm_models import UserTagPreference, Tag, Interaction, Feedback, Res
 
 logger = logging.getLogger(__name__)
 
-# 学习率
-LEARNING_RATE = 0.1
+# ── 偏好更新常量 ──────────────────────────────────────────
+# 设计文档：Preference(tag) = Preference(tag) + (Action_Weight × Tag_Strength)
+LIKE_WEIGHT = 0.1          # 点赞权重
+DISLIKE_WEIGHT = -0.2      # 踩权重（负向信号更强烈）
+PARENT_DECAY = 0.5         # 父级标签的衰减比例（子标签点赞 → 父标签获得 0.5x 加分）
 
 
 async def get_user_profile(user_id: str) -> dict:
@@ -75,48 +78,70 @@ async def get_user_profile(user_id: str) -> dict:
 async def update_preference_from_feedback(
     user_id: str,
     restaurant_id: str,
-    feedback_rating: int,
+    action_type: str,
 ) -> None:
     """
-    feedback 触发偏好更新：
-    History_new(tag) = History_old(tag) + η * feedback_rating * restaurant_tag_weight
+    反馈触发偏好更新（显式 LIKE/DISLIKE 驱动）：
+
+    Preference(tag) = Preference(tag) + (Action_Weight × Tag_Strength)
+      - LIKE:    Action_Weight = +0.1
+      - DISLIKE: Action_Weight = -0.2
+
+    同时对每个标签的父级标签（通过 tag.parent_id）执行层级传递，
+    衰减比例 PARENT_DECAY = 0.5（即父级标签得分变化量 = 子级的一半）。
+
+    最终结果 clamp 到 [0.0, 1.0]。
     """
+    if action_type not in ("LIKE", "DISLIKE"):
+        logger.warning("update_preference_from_feedback: 未知 action_type=%s，跳过", action_type)
+        return
+
+    action_weight = LIKE_WEIGHT if action_type == "LIKE" else DISLIKE_WEIGHT
+
     try:
         async with get_db() as db:
-            # 获取餐厅关联的所有标签及权重
+            # 获取餐厅关联的所有标签及权重（Tag_Strength = RestaurantTag.weight）
             rows = await db.execute(
-                select(RestaurantTag)
+                select(RestaurantTag, Tag.parent_id)
+                .join(Tag, Tag.id == RestaurantTag.tag_id)
                 .where(RestaurantTag.restaurant_id == restaurant_id)
             )
-            rt_list = rows.scalars().all()
+            rt_pairs = rows.all()   # list of (RestaurantTag, parent_id | None)
 
             now = datetime.now().isoformat()
-            for rt in rt_list:
-                # 查找或创建用户偏好记录
+
+            async def _update_tag(tag_id: int, tag_strength: float, weight_multiplier: float) -> None:
+                """更新单条 user_tag_preference 记录。"""
+                delta = action_weight * tag_strength * weight_multiplier
                 pref_row = await db.execute(
                     select(UserTagPreference).where(
                         UserTagPreference.user_id == user_id,
-                        UserTagPreference.tag_id == rt.tag_id,
+                        UserTagPreference.tag_id == tag_id,
                     )
                 )
                 pref = pref_row.scalar_one_or_none()
-
-                # 归一化 feedback_rating 到 [0,1]
-                normalized_rating = (feedback_rating - 1) / 4.0
-
                 if pref:
-                    new_val = pref.preference + LEARNING_RATE * normalized_rating * rt.weight
-                    pref.preference = max(0.0, min(1.0, new_val))
+                    pref.preference = max(0.0, min(1.0, pref.preference + delta))
                     pref.updated_at = now
                 else:
-                    new_pref = UserTagPreference(
+                    db.add(UserTagPreference(
                         user_id=user_id,
-                        tag_id=rt.tag_id,
-                        preference=0.5 + LEARNING_RATE * normalized_rating * rt.weight,
+                        tag_id=tag_id,
+                        preference=max(0.0, min(1.0, 0.5 + delta)),
                         updated_at=now,
-                    )
-                    db.add(new_pref)
+                    ))
 
-        logger.info("偏好更新完成 user=%s restaurant=%s rating=%d", user_id, restaurant_id, feedback_rating)
+            for rt, parent_id in rt_pairs:
+                # 1) 更新精确标签
+                await _update_tag(rt.tag_id, rt.weight, 1.0)
+
+                # 2) 层级传递：若有父级标签，以 PARENT_DECAY 衰减比例再更新一次
+                if parent_id is not None:
+                    await _update_tag(parent_id, rt.weight, PARENT_DECAY)
+
+        logger.info(
+            "偏好更新完成 user=%s restaurant=%s action=%s",
+            user_id, restaurant_id, action_type,
+        )
     except Exception:
         logger.exception("偏好更新失败 user=%s", user_id)

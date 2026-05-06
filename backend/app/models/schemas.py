@@ -107,7 +107,11 @@ class FeedbackRequest(BaseModel):
     user_id: str = Field(description="用户标识")
     recommendation_id: str | None = Field(default=None, description="对应的推荐记录ID")
     restaurant_id: str = Field(description="餐馆ID")
-    rating: int = Field(ge=1, le=5, description="满意度评分 1~5")
+    action_type: Literal["LIKE", "DISLIKE"] | None = Field(
+        default=None,
+        description="显式表态：LIKE=点赞，DISLIKE=踩（优先于 rating 派生）",
+    )
+    rating: int = Field(ge=1, le=5, description="满意度评分 1~5（若未指定 action_type，>=4 视为 LIKE，<=2 视为 DISLIKE）")
     chosen: bool = Field(default=True, description="是否实际选择了该餐馆")
 
 

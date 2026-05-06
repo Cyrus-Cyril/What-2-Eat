@@ -7,12 +7,12 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, desc
 
 from app.db.database import get_db
-from app.db.orm_models import UserQuery, Recommendation, Feedback
+from app.db.orm_models import UserQuery, Recommendation, Feedback, Interaction, RestaurantTag, Tag
 from app.models.schemas import RecommendRequest, RestaurantOut
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,93 @@ async def save_feedback(
     except Exception:
         logger.exception("save_feedback 失败")
     return feedback_id
+
+
+async def save_interaction(
+    user_id: str,
+    restaurant_id: str,
+    action_type: str,
+) -> None:
+    """将用户的显式表态（LIKE/DISLIKE）写入 interaction 表。"""
+    try:
+        async with get_db() as db:
+            db.add(Interaction(
+                user_id=user_id,
+                restaurant_id=restaurant_id,
+                action_type=action_type,
+                timestamp=_now(),
+            ))
+    except Exception:
+        logger.exception("save_interaction 失败")
+
+
+async def get_user_blacklist(user_id: str, hours: int = 24) -> list[str]:
+    """
+    返回用户近 `hours` 小时内踩过（DISLIKE）的餐厅 ID 列表。
+    推荐引擎可据此在候选集中过滤这些餐厅。
+    """
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        async with get_db() as db:
+            rows = await db.execute(
+                select(Interaction.restaurant_id)
+                .where(
+                    Interaction.user_id == user_id,
+                    Interaction.action_type == "DISLIKE",
+                    Interaction.timestamp >= cutoff,
+                )
+            )
+            return [r[0] for r in rows.all()]
+    except Exception:
+        logger.exception("get_user_blacklist 失败 user=%s", user_id)
+        return []
+
+
+async def get_recent_feedback_context(user_id: str, limit: int = 5) -> dict:
+    """
+    获取用户最近一批 LIKE/DISLIKE 的标签上下文，供解释系统生成 hello_voice 时使用。
+
+    返回结构：
+      {
+        "liked_tags":    ["川菜", "火锅"],   # 最近点赞餐厅关联的标签（去重）
+        "disliked_tags": ["西餐"],            # 最近踩过餐厅关联的标签（去重）
+      }
+    """
+    context: dict = {"liked_tags": [], "disliked_tags": []}
+    try:
+        async with get_db() as db:
+            # 取最近 N 条 LIKE/DISLIKE 记录
+            rows = await db.execute(
+                select(Interaction.restaurant_id, Interaction.action_type)
+                .where(
+                    Interaction.user_id == user_id,
+                    Interaction.action_type.in_(["LIKE", "DISLIKE"]),
+                )
+                .order_by(desc(Interaction.timestamp))
+                .limit(limit)
+            )
+            records = rows.all()
+            if not records:
+                return context
+
+            liked_rids = {r[0] for r in records if r[1] == "LIKE"}
+            disliked_rids = {r[0] for r in records if r[1] == "DISLIKE"}
+
+            async def _get_tags_for_restaurants(rids: set[str]) -> list[str]:
+                if not rids:
+                    return []
+                tag_rows = await db.execute(
+                    select(Tag.name)
+                    .join(RestaurantTag, RestaurantTag.tag_id == Tag.id)
+                    .where(RestaurantTag.restaurant_id.in_(rids))
+                )
+                return list({r[0] for r in tag_rows.all()})
+
+            context["liked_tags"] = await _get_tags_for_restaurants(liked_rids)
+            context["disliked_tags"] = await _get_tags_for_restaurants(disliked_rids)
+    except Exception:
+        logger.exception("get_recent_feedback_context 失败 user=%s", user_id)
+    return context
 
 
 async def get_history(user_id: str, page: int = 1, page_size: int = 20) -> tuple[list[dict], int]:
