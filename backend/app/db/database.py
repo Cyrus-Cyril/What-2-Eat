@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.exc import SQLAlchemyError
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -15,13 +16,10 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# 确保 data 目录存在
-os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
-
 engine = create_async_engine(
     config.DB_URL,
     echo=False,
-    connect_args={"check_same_thread": False},
+    # MySQL 不需要 check_same_thread
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -36,29 +34,19 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    """执行 schema.sql 建表（幂等）"""
-    sql_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sql", "schema.sql")
-    if not os.path.exists(sql_path):
-        logger.warning("schema.sql 未找到: %s", sql_path)
+    """验证数据库连接（表已通过 mysql_schema.sql 预先创建）"""
+    try:
+        async with engine.begin() as conn:
+            # 仅做一次 ping，确认连接可用
+            await conn.exec_driver_sql("SELECT 1")
+        logger.info("数据库连接成功: %s@%s/%s",
+                    getattr(config, "DB_USER", ""), 
+                    getattr(config, "DB_HOST", ""), 
+                    getattr(config, "DB_NAME", ""))
+    except SQLAlchemyError as e:
+        logger.error("无法连接到数据库。错误: %s", e)
+        logger.error("请检查 .env 中的 DB_USER/DB_PASSWORD/DB_HOST/DB_PORT/DB_NAME。")
         return
-
-    with open(sql_path, encoding="utf-8") as f:
-        raw = f.read()
-
-    # 去掉行内注释（-- ...），避免注释中的分号干扰分割
-    lines = []
-    for line in raw.splitlines():
-        stripped = line.split("--")[0]
-        lines.append(stripped)
-    sql = "\n".join(lines)
-
-    async with engine.begin() as conn:
-        for statement in sql.split(";"):
-            stmt = statement.strip()
-            if stmt:
-                await conn.exec_driver_sql(stmt)
-
-    logger.info("数据库建表完成: %s", config.DB_PATH)
 
 
 @asynccontextmanager
