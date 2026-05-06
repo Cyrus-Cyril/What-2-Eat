@@ -12,14 +12,14 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, desc
 
 from app.db.database import get_db
-from app.db.orm_models import UserQuery, Recommendation, Feedback, Interaction, RestaurantTag, Tag
+from app.db.orm_models import UserQuery, Recommendation, Feedback, Interaction, RestaurantTag, Tag, User
 from app.models.schemas import RecommendRequest, RestaurantOut
 
 logger = logging.getLogger(__name__)
 
 
-def _now() -> str:
-    return datetime.now().isoformat()
+def _now() -> datetime:
+    return datetime.now()
 
 
 async def save_query(req: RecommendRequest) -> str:
@@ -29,6 +29,12 @@ async def save_query(req: RecommendRequest) -> str:
 
     try:
         async with get_db() as db:
+            # ensure user exists to satisfy foreign key constraint
+            if req.user_id:
+                existing = await db.get(User, req.user_id)
+                if existing is None:
+                    db.add(User(id=req.user_id))
+
             db.add(UserQuery(
                 id=query_id,
                 user_id=req.user_id,
@@ -39,7 +45,6 @@ async def save_query(req: RecommendRequest) -> str:
                 budget_max=req.budget_max,
                 taste=taste_val,
                 query_text=getattr(req, "query", None),
-                created_at=_now(),
             ))
     except Exception:
         logger.exception("save_query 失败")
@@ -66,7 +71,6 @@ async def save_recommendations(query_id: str, results: list[RestaurantOut]) -> N
                     matched_tags=json.dumps(explain_dict.get("matched_tags", []), ensure_ascii=False),
                     reason_hint=json.dumps(explain_dict.get("reason_hint", []), ensure_ascii=False),
                     explain_json=json.dumps(explain_dict, ensure_ascii=False),
-                    created_at=_now(),
                 ))
     except Exception:
         logger.exception("save_recommendations 失败")
@@ -90,7 +94,6 @@ async def save_feedback(
                 restaurant_id=restaurant_id,
                 rating=rating,
                 chosen=1 if chosen else 0,
-                created_at=_now(),
             ))
     except Exception:
         logger.exception("save_feedback 失败")
@@ -109,7 +112,6 @@ async def save_interaction(
                 user_id=user_id,
                 restaurant_id=restaurant_id,
                 action_type=action_type,
-                timestamp=_now(),
             ))
     except Exception:
         logger.exception("save_interaction 失败")
@@ -120,7 +122,7 @@ async def get_user_blacklist(user_id: str, hours: int = 24) -> list[str]:
     返回用户近 `hours` 小时内踩过（DISLIKE）的餐厅 ID 列表。
     推荐引擎可据此在候选集中过滤这些餐厅。
     """
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = datetime.now() - timedelta(hours=hours)
     try:
         async with get_db() as db:
             rows = await db.execute(

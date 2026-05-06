@@ -61,8 +61,17 @@ def test_price_medium_score():
 
 
 def test_price_low_score():
+    """分数低但实际在预算内 → 不应显示「略超预算」"""
     r = {"distance_m": 500, "rating": 4.0, "avg_price": 80.0, "category": "快餐"}
-    result = build_explain(r, _make_score(price=0.3))
+    # budget_max=100，价格 80 未超预算，不应出现「略超预算」
+    result = build_explain(r, _make_score(price=0.3), budget_max=100.0)
+    dim = next(d for d in result.match_details if d.dimension == "人均价格")
+    assert "略超预算" not in dim.detail
+
+def test_price_over_budget():
+    """实际价格超过 budget_max → 显示「略超预算」"""
+    r = {"distance_m": 500, "rating": 4.0, "avg_price": 120.0, "category": "快餐"}
+    result = build_explain(r, _make_score(price=0.3), budget_max=100.0)
     dim = next(d for d in result.match_details if d.dimension == "人均价格")
     assert "略超预算" in dim.detail
 

@@ -65,6 +65,7 @@ def build_explain(
     restaurant: dict,
     score_detail: ScoreDetail,
     taste: str | None = None,
+    budget_max: float | None = None,
 ) -> ExplainData:
     """
     根据评分明细生成 ExplainData，包含 dimension_details、reasoning_logic、summary。
@@ -95,14 +96,25 @@ def build_explain(
     ))
 
     # ── 人均价格维度 ──────────────────────────────────────
+    # 优先以「实际价格 vs budget_max」判断是否超预算，避免仅凭分数误判
+    _over_budget = (
+        budget_max is not None
+        and avg_price > 0
+        and avg_price > budget_max
+    )
     if score_detail.price >= 0.8:
         price_detail = f"人均约{int(avg_price)}元，非常合适"
         hints.append("价格非常合适")
     elif score_detail.price >= 0.6:
         price_detail = f"人均约{int(avg_price)}元，适中"
         hints.append("价格适中")
-    else:
+    elif _over_budget:
         price_detail = f"人均约{int(avg_price)}元，略超预算"
+    elif avg_price > 0:
+        price_detail = f"人均约{int(avg_price)}元，适中"
+        hints.append("价格适中")
+    else:
+        price_detail = "价格待确认"
 
     price_impact = _score_impact(score_detail.price)
     match_details.append(DimensionDetailLocal(

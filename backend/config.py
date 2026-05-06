@@ -7,8 +7,13 @@ import logging
 from dotenv import load_dotenv, find_dotenv
 
 
-# Load .env from project root if present
-load_dotenv(find_dotenv())
+# 以 config.py 所在目录为起点向上查找 .env，避免子进程工作目录不一致导致加载失败
+_env_path = find_dotenv(
+    filename=".env",
+    raise_error_if_not_found=False,
+    usecwd=False,                     # 从 __file__ 所在目录起搜，而非 cwd
+)
+load_dotenv(_env_path, override=True)
 
 # ── 高德地图 API ──────────────────────────────────────────
 AMAP_API_KEY = os.getenv("AMAP_API_KEY", "6f38295e3f0fe606c75ea136b154db33")
@@ -30,12 +35,21 @@ SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 USE_MOCK = os.getenv("USE_MOCK", "false").lower() == "true"
 
 # ── 数据库 ──────────────────────────────────────────────────
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "master.db"))
-DB_URL = f"sqlite+aiosqlite:///{DB_PATH}"
-# 主库（写）
-DB_MASTER_URL = os.getenv("DB_MASTER_URL", "sqlite:///./data/master.db")
-# 从库（读）
-DB_SLAVE_URL = os.getenv("DB_SLAVE_URL", "sqlite:///./data/slave.db")
+# 优先从 .env 读取数据库连接配置，默认为本地 MySQL what2eat 数据库
+# 格式: mysql+aiomysql://user:password@host:port/dbname
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "123456")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "3306")
+DB_NAME = os.getenv("DB_NAME", "what2eat")
+
+DB_URL = os.getenv(
+    "DB_URL", 
+    f"mysql+aiomysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
+# 兼容性变量（如果其他地方用到）
+DB_MASTER_URL = DB_URL
+DB_SLAVE_URL = DB_URL
 
 # ── 日志 ──────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

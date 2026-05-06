@@ -140,7 +140,7 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
 
         # 2) 基于评分明细生成结构化解释（规则层）
         #    该函数返回本模块内部的 ExplainData dataclass（不是 Pydantic），包含用于生成自然语言的证据链
-        explain_obj = build_explain(r, score_detail, req.taste)
+        explain_obj = build_explain(r, score_detail, req.taste, budget_max=req.budget_max)
 
         # 3) 生成简短的合成理由（用于表格列或数据库的 reason 字段），最多取 3 条 hint
         reason = "；".join(explain_obj.reason_hint) if explain_obj.reason_hint else "综合条件较匹配"
