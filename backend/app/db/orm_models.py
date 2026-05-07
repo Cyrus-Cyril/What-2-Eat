@@ -42,7 +42,7 @@ class RestaurantTag(Base):
 
 
 class User(Base):
-    __tablename__ = "user"
+    __tablename__ = "app_user"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
@@ -51,7 +51,7 @@ class User(Base):
 class UserTagPreference(Base):
     __tablename__ = "user_tag_preference"
 
-    user_id: Mapped[str] = mapped_column(String(100), ForeignKey("user.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(100), ForeignKey("app_user.id"), primary_key=True)
     tag_id: Mapped[int] = mapped_column(BIGINT, ForeignKey("tag.id"), primary_key=True)
     preference: Mapped[float] = mapped_column(Float, default=0.5)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
@@ -61,7 +61,7 @@ class Interaction(Base):
     __tablename__ = "interaction"
 
     id: Mapped[int] = mapped_column(BIGINT, primary_key=True, autoincrement=True)
-    user_id: Mapped[str] = mapped_column(String(100), ForeignKey("user.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(100), ForeignKey("app_user.id"), nullable=False)
     restaurant_id: Mapped[str] = mapped_column(String(100), nullable=False)
     action_type: Mapped[str | None] = mapped_column(String(20))
     score: Mapped[float | None] = mapped_column(Float)
@@ -72,7 +72,7 @@ class UserQuery(Base):
     __tablename__ = "user_query"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    user_id: Mapped[str | None] = mapped_column(String(100), ForeignKey("user.id"))
+    user_id: Mapped[str | None] = mapped_column(String(100), ForeignKey("app_user.id"))
     longitude: Mapped[float | None] = mapped_column(Float)
     latitude: Mapped[float | None] = mapped_column(Float)
     radius: Mapped[int | None] = mapped_column(Integer)
@@ -106,7 +106,7 @@ class Feedback(Base):
     __tablename__ = "feedback"
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    user_id: Mapped[str | None] = mapped_column(String(100), ForeignKey("user.id"))
+    user_id: Mapped[str | None] = mapped_column(String(100), ForeignKey("app_user.id"))
     recommendation_id: Mapped[str | None] = mapped_column(String(100), ForeignKey("recommendation.id"))
     restaurant_id: Mapped[str | None] = mapped_column(String(100))
     rating: Mapped[int | None] = mapped_column(Integer)
