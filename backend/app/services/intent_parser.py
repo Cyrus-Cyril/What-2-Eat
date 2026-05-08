@@ -1,18 +1,16 @@
 """
 app/services/intent_parser.py
-自然语言意图解析 —— 调用 LLM 提取结构化参数，多源合并为 RecommendRequest
-支持三层意图处理：
-  Scene A (Context-Only)   — 无显式意图，按时间动态调整权重
-  Scene B (Soft Boost)     — 模糊偏好，将 w_tag 提升 1.5x
-  Scene C (Hard Filter)    — 明确品类/价格，先硬过滤候选集
+自然语言意图解析 —— 调用 LLM 产出动态约束集（IntentConstraint），多源合并为 RecommendRequest
+三层解析架构：维度（Dimension）+ 目标值（Value）+ 强度（Strength）+ 权重（Weight）
+  strength="required"  — 用户使用绝对词（"必须、一定要、只能、不要"）→ 陡峭 S 型惩罚
+  strength="preferred" — 用户使用建议词（"想吃、喜欢、稍微、最好是"）→ 平缓指数衰减
+  strength="neutral"   — 用户未提及，系统自动补全                     → 无惩罚
 """
 from __future__ import annotations
 
 import json
 import logging
-import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, time as dtime
 from typing import Any
 
 import httpx
@@ -23,71 +21,78 @@ from app.services.user_profile import get_user_profile
 
 logger = logging.getLogger(__name__)
 
-# ── 基础权重（与 scorer.py 保持一致）────────────────────────────────
-_W_DISTANCE = 0.30
-_W_PRICE    = 0.25
-_W_RATING   = 0.25
-_W_TAG      = 0.20
+# ── 默认权重（各维度等权基准）────────────────────────────────────────
+_DEFAULT_WEIGHTS: dict[str, float] = {
+    "distance": 0.30,
+    "price":    0.25,
+    "rating":   0.25,
+    "tags":     0.20,
+}
 
 
 @dataclass
-class IntentAnalysis:
+class ConstraintItem:
+    """单维度约束描述"""
+    values: list[str] = field(default_factory=list)   # 标签值列表（tags 维度）
+    preferred: float | None = None                     # 期望值（price 维度，元）
+    max_limit: float | None = None                     # 硬性上限（price/distance）
+    strength: str = "neutral"                          # required / preferred / neutral
+    weight: float = 0.25                               # LLM 分配的维度权重 0~1
+    tolerance: str | None = None                       # high/medium/low（price 专用）
+
+
+@dataclass
+class IntentConstraint:
     """
-    analyze_intent() 的输出，驱动 recommender 的过滤与权重调整。
+    analyze_intent() 的输出 —— 动态约束集。
+    驱动 recommender 的惩罚计算与动态权重融合。
 
-    intent_type:
-        "context_only" — Scene A：无显式意图
-        "soft_boost"   — Scene B：模糊偏好
-        "hard_filter"  — Scene C：明确品类/价格
-    filter_tags:        Scene C 硬过滤标签列表
-    boost_tags:         Scene B 软加权标签（记录用，权重已写入 w_tag）
-    filter_budget_max:  Scene C 价格上限（元）
-    w_distance/price/rating/tag: 已根据场景调整好的有效权重（和为 1.0）
+    constraints: 各维度约束（tags/price/distance/rating）
+    exclude_tags: 用户明确排斥的标签（直接硬过滤）
+    reason_hint:  LLM 一句话总结用户意图（供解释系统使用）
+    fallback_applied: True 表示 required 已被降级为 preferred（兜底触发后）
     """
-    intent_type: str = "context_only"
-    filter_tags: list[str] = field(default_factory=list)
-    boost_tags: list[str] = field(default_factory=list)
-    filter_budget_max: float | None = None
-    w_distance: float = _W_DISTANCE
-    w_price:    float = _W_PRICE
-    w_rating:   float = _W_RATING
-    w_tag:      float = _W_TAG
-    # 标记是否由硬过滤空结果降级而来（供日志/explain 使用）
-    fallback_from_hard_filter: bool = False
+    intent_type: str = "adaptive_constraint"
+    constraints: dict[str, ConstraintItem] = field(default_factory=dict)
+    exclude_tags: list[str] = field(default_factory=list)
+    reason_hint: str = ""
+    fallback_applied: bool = False
 
 
+# ── 统一 LLM Prompt（一次调用同时提取参数 + 约束集）────────────────
+_UNIFIED_PROMPT = """\
+你是一个餐饮意图解析助手。请从用户输入中同时提取结构化参数与约束集，以标准 JSON 格式输出。
 
-_LLM_PROMPT_TEMPLATE = """\
-你是一个餐饮意图解析助手。请从用户的提问中提取以下信息并以标准 JSON 格式输出。
-1. budget_max: 用户能接受的最高价格（数字，若提到"很贵"设200，"便宜"设30，否则 null）
-2. budget_min: 用户能接受的最低价格（数字，否则 null）
-3. radius: 搜索范围（数字，单位米。如"附近"设1000，"很近"设500，"远一点"设3000，否则 null）
-4. taste: 提取口味或菜系关键词（字符串数组，如 ["川菜", "火锅"]，否则 []）
-5. scene: 提取场景（如 "聚餐", "约会"，否则 null）
+**Part A — 基础参数**：
+- `budget_max`：最高价格（数字，"很贵"设200，"便宜"设30，否则 null）
+- `budget_min`：最低价格（数字，否则 null）
+- `radius`：搜索范围（数字，单位米。"附近"设1000，"很近"设500，"远一点"设3000，否则 null）
+- `taste`：口味或菜系关键词数组（如 ["川菜","火锅"]，否则 []）
+- `scene`：就餐场景（如 "聚餐"/"约会"，否则 null）
 
-用户文字："{query}"
+**Part B — 约束集**（键为维度 tags/price/distance/rating）：
+- `strength`：
+  - "required"  → 用户使用了"必须、一定要、只能、不要"等绝对词
+  - "preferred" → 用户使用了"想吃、喜欢、稍微、最好是"等建议词
+  - "neutral"   → 用户未提及
+- `weight`：根据用户说话重心分配 0~1（各维度之和应为 1.0）
+- `values`：（仅 tags 维度）菜系/口味标签数组
+- `preferred`：（仅 price 维度）期望价格（数字，元）
+- `max_limit`：硬性上限（price/distance，数字；price 单位元，distance 单位米）
+- `tolerance`：（仅 price 维度）"high"/"medium"/"low"，对超价的容忍度
 
-输出要求：只输出 JSON，严禁任何额外解释。\
-"""
-
-_INTENT_ANALYSIS_PROMPT = """\
-你是一个餐饮意图分类助手。请分析用户输入，判断意图类型，并提取关键信息。
-
-意图类型定义（三选一）：
-- "context_only"  : 用户无特定标签、口味或价格表述（如"附近随便吃吃"、"推荐一下"、空输入）
-- "soft_boost"    : 用户有模糊倾向但未指定具体品类（如"想吃点辣的"、"要便宜点"、"想吃清淡的"）
-- "hard_filter"   : 用户明确指定品类或价格上限（如"吃火锅"、"川菜"、"30元以下"、"不超过50块"）
-
-请提取：
-1. intent_type       : 上述三种之一
-2. filter_tags       : 硬过滤标签数组（仅 hard_filter 时填菜系/品类，如 ["火锅"] 或 ["川菜", "串串"]，否则 []）
-3. boost_tags        : 软加权标签数组（仅 soft_boost 时填口味倾向，如 ["辣"] 或 ["清淡"]，否则 []）
-4. filter_budget_max : 硬过滤价格上限（数字，仅用户明确说"X元以下/不超过X元"时填写，否则 null）
+**Part C — 其他**：
+- `exclude_tags`：用户明确说"不要/不喜欢"的标签数组（否则 []）
+- `reason_hint`：一句话总结用户意图（中文）
 
 用户输入："{query}"
 
 输出要求：只输出 JSON，严禁任何额外解释。
-示例：{{"intent_type": "hard_filter", "filter_tags": ["火锅"], "boost_tags": [], "filter_budget_max": null}}
+示例：{{"budget_max": 100, "budget_min": null, "radius": null, "taste": ["火锅"], "scene": null, \
+"constraints": {{"tags": {{"values": ["火锅"], "strength": "required", "weight": 0.5}}, \
+"price": {{"preferred": 80, "max_limit": 100, "strength": "preferred", "weight": 0.3, "tolerance": "high"}}, \
+"distance": {{"max_limit": 2000, "strength": "neutral", "weight": 0.2}}}}, \
+"exclude_tags": [], "reason_hint": "用户想吃火锅，预算约百元"}}\
 """
 
 
@@ -99,141 +104,115 @@ class IntentParser:
         "budget_min": 0,
         "budget_max": 100,
         "taste": [],
-        "max_count": 10,
+        "max_count": None,
     }
-
-    # ── Scene A：工作日午餐权重 ───────────────────────────────────────
-    _LUNCH_WEIGHTS = {"w_distance": 0.60, "w_price": 0.30, "w_rating": 0.10, "w_tag": 0.00}
 
     async def analyze_intent(
         self,
         user_input: str | None,
         context: dict | None = None,
-    ) -> IntentAnalysis:
+    ) -> IntentConstraint:
         """
-        分析用户意图，返回 IntentAnalysis（过滤标签 + 动态权重）。
-
-        优先级：
-          1. 若 user_input 有内容 → 调用 LLM 分类（Scene A/B/C）
-          2. 若 user_input 为空   → 直接判定为 Scene A（Context-Only）
-          3. Scene A 时额外检查当前时间，工作日午餐覆盖权重
+        分析用户意图，返回 IntentConstraint（动态约束集）。
+        - 有输入 → 调用 LLM 提取约束（strength/weight/values/max_limit）
+        - 无输入 → 返回全 neutral 等权默认约束
         """
-        analysis = IntentAnalysis()
+        if not user_input or not user_input.strip():
+            return self._default_neutral_constraint()
 
-        # Step 1: LLM 分类（有文字输入时）
-        llm_result: dict = {}
-        if user_input and user_input.strip():
-            llm_result = await self._call_intent_llm(user_input)
+        raw = await self._call_unified_llm(user_input)
+        if not raw:
+            return self._default_neutral_constraint()
+        return self._parse_constraint(raw)
 
-        intent_type = llm_result.get("intent_type", "context_only")
-        if intent_type not in ("context_only", "soft_boost", "hard_filter"):
-            intent_type = "context_only"
-        analysis.intent_type = intent_type
-
-        # Step 2: 根据场景填充字段
-        if intent_type == "hard_filter":
-            # Scene C: 提取硬过滤标签和价格上限
-            raw_filter = llm_result.get("filter_tags", [])
-            analysis.filter_tags = raw_filter if isinstance(raw_filter, list) else []
-            raw_budget = llm_result.get("filter_budget_max")
-            analysis.filter_budget_max = float(raw_budget) if raw_budget is not None else None
-            # Scene C 使用默认权重，不调整
-            analysis.w_distance = _W_DISTANCE
-            analysis.w_price    = _W_PRICE
-            analysis.w_rating   = _W_RATING
-            analysis.w_tag      = _W_TAG
-
-        elif intent_type == "soft_boost":
-            # Scene B: 提取软加权标签，将 w_tag 乘以 1.5 并重新归一化
-            raw_boost = llm_result.get("boost_tags", [])
-            analysis.boost_tags = raw_boost if isinstance(raw_boost, list) else []
-            w_tag_new = _W_TAG * 1.5
-            # 其余三项按原比例瓜分剩余权重
-            remaining = 1.0 - w_tag_new
-            original_others = _W_DISTANCE + _W_PRICE + _W_RATING  # 0.80
-            analysis.w_distance = round(remaining * (_W_DISTANCE / original_others), 4)
-            analysis.w_price    = round(remaining * (_W_PRICE    / original_others), 4)
-            analysis.w_rating   = round(remaining * (_W_RATING   / original_others), 4)
-            analysis.w_tag      = round(w_tag_new, 4)
-
-        else:
-            # Scene A: 按时间动态调整权重
-            now = (context or {}).get("now") or datetime.now()
-            if self._is_weekday_lunch(now):
-                analysis.w_distance = self._LUNCH_WEIGHTS["w_distance"]
-                analysis.w_price    = self._LUNCH_WEIGHTS["w_price"]
-                analysis.w_rating   = self._LUNCH_WEIGHTS["w_rating"]
-                analysis.w_tag      = self._LUNCH_WEIGHTS["w_tag"]
-                logger.debug("Scene A 午餐模式：w_d=0.60 w_p=0.30")
-            else:
-                analysis.w_distance = _W_DISTANCE
-                analysis.w_price    = _W_PRICE
-                analysis.w_rating   = _W_RATING
-                analysis.w_tag      = _W_TAG
-
-        return analysis
-
-    def downgrade_to_soft_boost(self, analysis: IntentAnalysis) -> IntentAnalysis:
+    def relax_to_preferred(self, constraint: IntentConstraint) -> IntentConstraint:
         """
-        当 Scene C 硬过滤后候选集为空时，将原有的硬约束转化为软增强权重，
-        保证推荐流程有结果输出。
-
-        策略：
-        - 将 filter_tags 挪入 boost_tags（在 scorer 中作为高权重偏好参与打分）
-        - filter_tags / filter_budget_max 清空，不再做硬剔除
-        - 根据是否有预算约束，分两套权重方案：
-            有预算：品类(0.40) + 价格(0.45) + 距离(0.10) + 评分(0.05)
-            无预算：品类(0.55) + 评分(0.20) + 距离(0.20) + 价格(0.05)
-        - 标记 fallback_from_hard_filter = True
+        将所有 required 约束降级为 preferred，供兜底（Fallback）使用。
+        当 Top-N 全部分数过低时触发，保证推荐系统有可用结果输出。
         """
-        # 硬过滤标签合并进 boost_tags（保序去重）
-        merged_boost = list(dict.fromkeys(analysis.boost_tags + analysis.filter_tags))
-
-        has_budget = analysis.filter_budget_max is not None
-
-        if has_budget:
-            # 有预算约束：重心放在"品类最像"+"价格最近"
-            w_tag      = 0.50
-            w_price    = 0.35
-            w_distance = 0.10
-            w_rating   = 0.05
-        else:
-            # 仅有品类约束：重心放在"品类最像"，评分/距离次之
-            w_tag      = 0.55
-            w_price    = 0.05
-            w_distance = 0.20
-            w_rating   = 0.20
-
-        analysis.boost_tags                = merged_boost
-        analysis.filter_tags               = []    # 清除，不再硬剔除
-        analysis.filter_budget_max         = None  # 清除价格硬限制
-        analysis.w_tag                     = w_tag
-        analysis.w_price                   = w_price
-        analysis.w_distance                = w_distance
-        analysis.w_rating                  = w_rating
-        analysis.fallback_from_hard_filter = True
-
+        for item in constraint.constraints.values():
+            if item.strength == "required":
+                item.strength = "preferred"
+        constraint.fallback_applied = True
         logger.info(
-            "硬过滤降级为软增强：boost_tags=%s has_budget=%s "
-            "weights=[D=%.2f P=%.2f R=%.2f T=%.2f]",
-            merged_boost, has_budget,
-            w_distance, w_price, w_rating, w_tag,
+            "兜底降级：所有 required 约束已降级为 preferred，reason_hint=%s",
+            constraint.reason_hint,
         )
-        return analysis
+        return constraint
 
     @staticmethod
-    def _is_weekday_lunch(now: datetime) -> bool:
-        """工作日（周一至周五）11:00~13:30"""
-        return now.weekday() < 5 and dtime(11, 0) <= now.time() <= dtime(13, 30)
+    def _default_neutral_constraint() -> IntentConstraint:
+        """无输入时返回全 neutral 等权默认约束"""
+        w = _DEFAULT_WEIGHTS
+        return IntentConstraint(
+            constraints={
+                "distance": ConstraintItem(strength="neutral", weight=w["distance"]),
+                "price":    ConstraintItem(strength="neutral", weight=w["price"]),
+                "rating":   ConstraintItem(strength="neutral", weight=w["rating"]),
+                "tags":     ConstraintItem(strength="neutral", weight=w["tags"]),
+            },
+            reason_hint="用户未提供明确偏好，按综合评分推荐",
+        )
 
-    # 意图识别 LLM 调用（单独方法，便于测试和替换实现）
-    async def _call_intent_llm(self, user_input: str) -> dict:
-        """调用 LLM 完成意图分类，3秒超时，失败返回空字典（降级为 context_only）"""
+    @staticmethod
+    def _parse_constraint(raw: dict) -> IntentConstraint:
+        """
+        将 LLM 返回的 dict 解析为 IntentConstraint，并补齐/归一化权重
+        """
+        constraints: dict[str, ConstraintItem] = {}
+        raw_c = raw.get("constraints") or {}
+
+        for dim, val in raw_c.items():
+            if not isinstance(val, dict):
+                continue
+            strength = val.get("strength", "neutral")
+            if strength not in ("required", "preferred", "neutral"):
+                strength = "neutral"
+            constraints[dim] = ConstraintItem(
+                values=val.get("values", []) if isinstance(val.get("values"), list) else [],
+                preferred=float(val["preferred"]) if val.get("preferred") is not None else None,
+                max_limit=float(val["max_limit"]) if val.get("max_limit") is not None else None,
+                strength=strength,
+                weight=float(val.get("weight") or 0.25),
+                tolerance=val.get("tolerance"),
+            )
+
+        # 补齐缺失维度（neutral，平分剩余权重）
+        all_dims = ["tags", "price", "distance", "rating"]
+        existing_weight = sum(c.weight for c in constraints.values())
+        missing = [d for d in all_dims if d not in constraints]
+        if missing:
+            per = max(0.0, round((1.0 - existing_weight) / len(missing), 4))
+            # 对于没有分配权重的维度，默认分配剩余权重的平均值，并设置为 neutral
+            for d in missing:
+                constraints[d] = ConstraintItem(
+                    strength="neutral",
+                    weight=per,
+                )
+
+        # 归一化：确保权重之和为 1.0
+        total_w = sum(c.weight for c in constraints.values()) or 1.0
+        for c in constraints.values():
+            c.weight = round(c.weight / total_w, 4)
+
+        # 解析 exclude_tags（用户明确排斥的标签）
+        exclude = raw.get("exclude_tags", [])
+        return IntentConstraint(
+            constraints=constraints,
+            exclude_tags=exclude if isinstance(exclude, list) else [],
+            reason_hint=raw.get("reason_hint", ""),
+        )
+
+    async def _call_unified_llm(self, user_input: str) -> dict:
+        """
+        调用 LLM 一次，同时提取基础参数（budget/radius/taste）和约束集（IntentConstraint）。
+        失败时返回空字典，上层各自降级为默认值。
+        """
         if not config.LLM_API_KEY or not config.LLM_API_URL:
-            logger.debug("LLM_API_KEY/URL 未配置，跳过意图分类")
+            logger.debug("LLM_API_KEY/URL 未配置，跳过意图解析")
             return {}
 
-        prompt = _INTENT_ANALYSIS_PROMPT.format(query=user_input)
+        prompt = _UNIFIED_PROMPT.format(query=user_input)
         payload = {
             "model": config.LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
@@ -244,11 +223,13 @@ class IntentParser:
             "Content-Type": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 url = config.LLM_API_URL
                 if not url.endswith("/chat/completions"):
                     url = f"{url.rstrip('/')}/chat/completions"
                 resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 404:
+                    logger.warning("LLM URL 404，请确认 API URL 是否正确（当前尝试: %s）", url)
                 resp.raise_for_status()
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"].strip()
@@ -256,11 +237,12 @@ class IntentParser:
                     content = content.split("```")[1]
                     if content.startswith("json"):
                         content = content[4:]
+                logger.debug("LLM 统一解析原始响应: %s", content)
                 return json.loads(content)
         except (httpx.TimeoutException, httpx.HTTPError) as e:
-            logger.warning("意图分类 LLM 调用失败（%s），降级为 context_only", type(e).__name__)
+            logger.warning("LLM 调用失败（%s），降级为默认值", type(e).__name__)
         except (json.JSONDecodeError, KeyError, IndexError) as e:
-            logger.warning("意图分类 LLM 响应解析失败: %s", e)
+            logger.warning("LLM 响应解析失败: %s", e)
         return {}
 
     async def parse(
@@ -270,19 +252,24 @@ class IntentParser:
         raw_params: dict,
     ) -> RecommendRequest:
         """
-        多源参数合并：Query(LLM) > Raw Params > History > Default
+        多源参数合并：Query(LLM 单次) > Raw Params > History > Default
+        LLM 调用只发生一次（_call_unified_llm），同时产出基础参数与 IntentConstraint。
+        IntentConstraint 存入 req.intent，供 recommend_async 直接使用（不再重复调用 LLM）。
         """
-        # Step 1: LLM 解析自然语言
-        query_intent: dict = {}
+        # Step 1: 单次 LLM 调用 —— 同时提取基础参数和约束集
+        unified: dict = {}
         if query and query.strip():
-            query_intent = await self._call_llm(query)
+            unified = await self._call_unified_llm(query)
 
-        # Step 2: 获取历史偏好（有 user_id 时才查询）
+        # Step 2: 从统一结果中解析 IntentConstraint
+        intent = self._parse_constraint(unified) if unified else self._default_neutral_constraint()
+
+        # Step 3: 获取历史偏好（有 user_id 时才查询）
         history_profile: dict = {}
         if user_id:
             history_profile = await get_user_profile(user_id)
 
-        # Step 3: 合并参数
+        # Step 4: 合并参数
         final: dict[str, Any] = {}
 
         # 经纬度：前端传值 > 历史 > 默认
@@ -297,18 +284,18 @@ class IntentParser:
             or self.DEFAULT_VALUES["latitude"]
         )
 
-        # 预算/范围：Query > 前端 > 历史 > 默认
+        # 预算/范围：LLM > 前端 > 历史 > 默认
         for key in ["budget_min", "budget_max", "radius"]:
             final[key] = (
-                query_intent.get(key)
+                unified.get(key)
                 or raw_params.get(key)
                 or history_profile.get(f"avg_{key}")
-                or self.DEFAULT_VALUES[key]
+                or self.DEFAULT_VALUES.get(key)
             )
 
-        # 口味：Query + 前端 的并集；都无时用历史
+        # 口味：LLM + 前端 的并集；都无时用历史
         taste_set: set[str] = set()
-        llm_taste = query_intent.get("taste", [])
+        llm_taste = unified.get("taste", [])
         if isinstance(llm_taste, list):
             taste_set.update(llm_taste)
         elif isinstance(llm_taste, str) and llm_taste:
@@ -324,7 +311,6 @@ class IntentParser:
         if not taste_set:
             taste_set.update(history_profile.get("preferred_tastes", []))
 
-        # taste 以逗号分隔字符串传入 RecommendRequest
         final["taste"] = ",".join(taste_set) if taste_set else None
 
         # max_count：前端传值 > 默认
@@ -332,49 +318,9 @@ class IntentParser:
         final["max_distance"] = raw_params.get("max_distance")
         final["query"] = query
 
-        return RecommendRequest(user_id=user_id, **final)
-
-    async def _call_llm(self, query: str) -> dict:
-        """调用 LLM API 解析 query，3秒超时，失败返回空字典"""
-        if not config.LLM_API_KEY or not config.LLM_API_URL:
-            logger.debug("LLM_API_KEY/URL 未配置，跳过 LLM 解析")
-            return {}
-
-        prompt = _LLM_PROMPT_TEMPLATE.format(query=query)
-        payload = {
-            "model": config.LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-        }
-        headers = {
-            "Authorization": f"Bearer {config.LLM_API_KEY}",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # 拼接完整路径，确保兼容性
-                url = config.LLM_API_URL
-                if not url.endswith("/chat/completions"):
-                    url = f"{url.rstrip('/')}/chat/completions"
-                
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 404:
-                    logger.warning("LLM URL 404，请确认 API URL 是否正确（当前尝试: %s）", url)
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"].strip()
-                # 去除 markdown 代码块包装
-                if content.startswith("```"):
-                    content = content.split("```")[1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                return json.loads(content)
-        except (httpx.TimeoutException, httpx.HTTPError) as e:
-            logger.warning("LLM 调用失败（%s），降级为空意图", type(e).__name__)
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
-            logger.warning("LLM 响应解析失败: %s", e)
-        return {}
+        req = RecommendRequest(user_id=user_id, **final)
+        req.intent = intent   # 注入约束集，recommend_async 直接使用，无需再次调用 LLM
+        return req
 
 
 # 模块级单例
