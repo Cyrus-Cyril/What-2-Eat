@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import setup_logging, SERVER_HOST, SERVER_PORT
 from app.api.routes import router
-from app.db.database import init_db
+from app.db.database import init_db, engine
 
 setup_logging()
 
@@ -30,6 +30,12 @@ async def lifespan(application: FastAPI):
     logger.info(f"API 文档: http://{SERVER_HOST}:{SERVER_PORT}/docs")
     logger.info("=" * 50)
     yield
+    # 关闭数据库引擎，确保 aiomysql 的连接池在事件循环关闭前被释放
+    try:
+        await engine.dispose()
+        logger.info("数据库引擎已正确关闭")
+    except Exception:
+        logger.exception("关闭数据库引擎时发生异常")
     logger.info("What-2-Eat 后端服务已关闭")
 
 

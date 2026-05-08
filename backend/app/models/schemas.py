@@ -2,8 +2,8 @@
 app/models/schemas.py
 Pydantic 模型 —— 定义前后端接口的请求体与响应体结构
 """
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── 推荐接口 ──────────────────────────────────────────────
@@ -37,6 +37,8 @@ class ExplainData(BaseModel):
 
 
 class RecommendRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     user_id: str | None = Field(default=None, description="用户标识")
     query: str | None = Field(default=None, description="自然语言输入（如『想吃麻辣火锅』）")
     longitude: float = Field(default=114.362, description="用户当前经度（GCJ-02）", examples=[114.35968])
@@ -48,6 +50,8 @@ class RecommendRequest(BaseModel):
     taste: str | None = Field(default=None, description="口味偏好（如川菜、火锅）")
     max_distance: int | None = Field(default=None, ge=50, description="最大可接受距离（米）")
     people_count: int | None = Field(default=None, ge=1, description="就餐人数")
+    # 内部字段：由 intent_parser.parse() 写入，不暴露给 API，不参与序列化
+    intent: Any = Field(default=None, exclude=True, description="意图约束（内部传递，不序列化）")
 
 
 class RestaurantOut(BaseModel):

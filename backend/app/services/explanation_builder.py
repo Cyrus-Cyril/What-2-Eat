@@ -15,7 +15,7 @@ import httpx
 
 import config
 from app.services.explainer import ExplainData as LocalExplainData
-from app.services.intent_parser import IntentAnalysis
+from app.services.intent_parser import IntentConstraint
 from app.models.schemas import (
     StructuredContext,
     ExplanationSystem,
@@ -27,28 +27,29 @@ logger = logging.getLogger(__name__)
 
 # ── 场景描述映射 ──────────────────────────────────────────
 _SCENE_LABELS: dict[str, str] = {
-    "context_only": "Scene A - 环境感知推荐",
-    "soft_boost":   "Scene B - 偏好加权推荐",
-    "hard_filter":  "Scene C - 精准品类筛选",
+    "required": "精准约束推荐",
+    "preferred": "偏好导向推荐",
+    "neutral":  "综合评分推荐",
+    "fallback": "兜底偏好推荐（已松弛限制）",
 }
 
 # ── 规则模板（fallback） ───────────────────────────────────
 _WELCOME_TEMPLATES: dict[str, str] = {
-    "context_only": (
+    "neutral": (
         "好嘞！我扫了一眼你周围，给你挑了几家离得近、口碑不错的餐厅，"
         "价格也还算实在，应该都合适哈！"
     ),
-    "soft_boost": (
-        "懂你！我按你平时的口味优先给你捞出来了，"
+    "preferred": (
+        "懂你！我按你的口味倾向优先给你捞出来了，"
         "距离和价格也都照顾到了，这几家应该都对你胃口！"
     ),
-    "hard_filter": (
-        "搞定！我已经把符合你要求的都给你筛出来了，"
+    "required": (
+        "搞定！我已经把完全符合你要求的都给你筛出来了，"
         "按综合评分排好序了，几家都挺不错哈！"
     ),
-    "hard_filter_fallback": (
+    "fallback": (
         "哎，附近暂时没找到完全符合要求的……别担心，"
-        "我已经切换模式给你找最接近的了，应该也差不多嘛！"
+        "我已经自动放宽限制给你找最接近的了，应该也差不多嘛！"
     ),
 }
 
@@ -125,20 +126,25 @@ async def _call_llm(prompt: str, timeout: float = 3.0) -> str | None:
 
 
 def _build_structured_context(
-    intent: IntentAnalysis,
+    intent: IntentConstraint,
 ) -> StructuredContext:
-    """根据意图分析结果构建结构化上下文（纯规则）。"""
-    scene_label = _SCENE_LABELS.get(intent.intent_type, intent.intent_type)
-    if intent.fallback_from_hard_filter:
-        scene_label += "（已降级为软增强）"
+    """根据 IntentConstraint 构建结构化上下文（纯规则）。"""
+    if intent.fallback_applied:
+        scene_label = _SCENE_LABELS["fallback"]
+    else:
+        strengths = [c.strength for c in intent.constraints.values()]
+        if "required" in strengths:
+            scene_label = _SCENE_LABELS["required"]
+        elif "preferred" in strengths:
+            scene_label = _SCENE_LABELS["preferred"]
+        else:
+            scene_label = _SCENE_LABELS["neutral"]
 
-    core_tags = list(intent.filter_tags or intent.boost_tags or [])
+    tags_c = intent.constraints.get("tags")
+    core_tags = list(tags_c.values) if tags_c and tags_c.values else []
 
     adjusted_weights = {
-        "distance": f"{intent.w_distance:.2f}",
-        "price":    f"{intent.w_price:.2f}",
-        "rating":   f"{intent.w_rating:.2f}",
-        "tag":      f"{intent.w_tag:.2f}",
+        dim: f"{c.weight:.2f}" for dim, c in intent.constraints.items()
     }
 
     return StructuredContext(
@@ -166,36 +172,50 @@ def _build_feedback_note(ctx: dict | None) -> str:
 
 
 async def build_explanation_system(
-    intent: IntentAnalysis,
+    intent: IntentConstraint,
     req_query: str | None,
     result_count: int,
-    relaxation_info: dict | None = None,
+    fallback_note: str = "",
     recent_feedback_context: dict | None = None,
 ) -> ExplanationSystem:
     """
     构建全局解释系统：
-    - 规则生成 StructuredContext 和 my_logic（松弛策略摘要）
+    - 规则生成 StructuredContext
     - LLM（3s 超时）生成 hello_voice，失败降级为规则模板
-    - 若松弛搜索有坦诚告知内容（如预算放宽），注入 hello_voice
+    - 若兜底触发（fallback_note 非空），在 hello_voice 中坦白告知
     - 若用户有近期反馈（LIKE/DISLIKE），在 hello_voice 中自然提及
     """
     structured_context = _build_structured_context(intent)
-    my_logic = relaxation_info if relaxation_info else None
 
-    # 松弛告知前缀（坦诚告知用户系统做了哪些调整）
-    relaxation_note = (relaxation_info or {}).get("note", "")
+    # 兜底/约束调整说明（坦诚告知用户系统做了哪些调整）
+    relaxation_note = fallback_note or intent.reason_hint or ""
 
     # 近期反馈上下文摘要
     feedback_note = _build_feedback_note(recent_feedback_context)
 
-    # 构建 LLM prompt
+    # 约束强度摘要（供 LLM prompt 使用）
+    required_dims = [
+        f"{dim}({','.join(c.values) if c.values else str(c.max_limit)})"
+        for dim, c in intent.constraints.items()
+        if c.strength == "required"
+    ]
+    preferred_dims = [
+        f"{dim}({','.join(c.values) if c.values else str(c.preferred or c.max_limit)})"
+        for dim, c in intent.constraints.items()
+        if c.strength == "preferred"
+    ]
+    constraint_str = "；".join(
+        ([f"必须:{','.join(required_dims)}"] if required_dims else []) +
+        ([f"偏好:{','.join(preferred_dims)}"] if preferred_dims else [])
+    ) or "无特定约束"
+
     core_tags_str = "、".join(structured_context.core_tags) if structured_context.core_tags else "无"
     weights_str = "、".join(f"{k}={v}" for k, v in structured_context.adjusted_weights.items())
     prompt = _WELCOME_PROMPT_TEMPLATE.format(
         intent_mode=structured_context.intent_mode,
         core_tags_str=core_tags_str,
         weights_str=weights_str,
-        fallback="是" if intent.fallback_from_hard_filter else "否",
+        fallback="是" if intent.fallback_applied else "否",
         relaxation_note=relaxation_note if relaxation_note else "无",
         feedback_note=feedback_note if feedback_note else "无",
     )
@@ -204,13 +224,24 @@ async def build_explanation_system(
 
     # LLM 失败 → 规则降级
     if not hello_voice:
-        if intent.fallback_from_hard_filter:
-            hello_voice = _WELCOME_TEMPLATES["hard_filter_fallback"]
+        if intent.fallback_applied:
+            hello_voice = _WELCOME_TEMPLATES["fallback"]
         else:
-            hello_voice = _WELCOME_TEMPLATES.get(
-                intent.intent_type,
-                _WELCOME_TEMPLATES["context_only"],
-            )
+            strengths = [c.strength for c in intent.constraints.values()]
+            if "required" in strengths:
+                hello_voice = _WELCOME_TEMPLATES["required"]
+            elif "preferred" in strengths:
+                hello_voice = _WELCOME_TEMPLATES["preferred"]
+            else:
+                hello_voice = _WELCOME_TEMPLATES["neutral"]
+
+    my_logic: dict | None = None
+    if fallback_note or intent.fallback_applied:
+        my_logic = {
+            "fallback_applied": intent.fallback_applied,
+            "note": fallback_note or "已松弛 required 约束为 preferred",
+            "reason_hint": intent.reason_hint,
+        }
 
     return ExplanationSystem(
         hello_voice=hello_voice,
