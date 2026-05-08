@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, desc
 
 from app.db.database import get_db
-from app.db.orm_models import UserQuery, Recommendation, Feedback, Interaction, RestaurantTag, Tag, User
+from app.db.orm_models import UserQuery, Recommendation, Feedback, Interaction, RestaurantTag, Tag, User, Restaurant
 from app.models.schemas import RecommendRequest, RestaurantOut
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,20 @@ async def save_recommendations(query_id: str, results: list[RestaurantOut]) -> N
     """批量保存推荐记录"""
     try:
         async with get_db() as db:
+            # 先 upsert 餐馆数据，满足外键约束
+            for r in results:
+                await db.merge(Restaurant(
+                    id=r.restaurant_id,
+                    name=r.name,
+                    category=r.category,
+                    address=r.address,
+                    latitude=r.latitude,
+                    longitude=r.longitude,
+                    rating=r.rating,
+                    avg_price=r.avg_price,
+                ))
+            # 必须 flush，使餐馆记录先写入 DB，再插入有外键约束的推荐记录
+            await db.flush()
             for rank, r in enumerate(results, start=1):
                 explain_dict = r.explain.model_dump() if r.explain else {}
                 db.add(Recommendation(
