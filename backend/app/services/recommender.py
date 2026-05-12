@@ -11,6 +11,7 @@ import asyncio
 import logging
 import math
 import json
+from app.db.redis_client import redis_client
 from dataclasses import asdict
 
 from app.services.data_entry import get_candidate_restaurants
@@ -199,14 +200,40 @@ def _score_restaurants(
 
     return results
 
-
 async def recommend_async(req: RecommendRequest) -> RecommendResponse:
-    """推荐主流程（async）"""
+    """（async + Redis缓存）"""
+
     logger.info(
         "收到推荐请求 user=%s lng=%.4f lat=%.4f radius=%d taste=%s budget=[%s,%s]",
         req.user_id, req.longitude, req.latitude, req.radius,
         req.taste, req.budget_min, req.budget_max,
     )
+
+    # =========================
+    # Redis 缓存 Key
+    # =========================
+    cache_key = (
+        f"recommend:{req.user_id}:"
+        f"{req.longitude:.3f}:"
+        f"{req.latitude:.3f}:"
+        f"{req.query}"
+    )
+
+    # =========================
+    # 查询 Redis 缓存
+    # =========================
+    try:
+        cached = redis_client.get(cache_key)
+
+        if cached:
+            logger.info("Redis 命中")
+
+            return RecommendResponse.model_validate_json(cached)
+
+        logger.info("Redis 未命中")
+
+    except Exception:
+        logger.exception("Redis 查询失败，继续执行推荐流程")
 
     # Step 0: 意图分析 —— 优先使用 parse() 预置的 IntentConstraint（零额外 LLM 调用）
     intent: IntentConstraint = (
@@ -214,10 +241,14 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
         if isinstance(req.intent, IntentConstraint)
         else await intent_parser.analyze_intent(req.query)
     )
+
     # 将 dataclass 转为可读 JSON 结构打印（保留中文）
     try:
         intent_dict = asdict(intent)
-        logger.info("意图解析结果:\n%s", json.dumps(intent_dict, ensure_ascii=False, indent=2))
+        logger.info(
+            "意图解析结果:\n%s",
+            json.dumps(intent_dict, ensure_ascii=False, indent=2)
+        )
     except Exception:
         logger.info("意图解析结果: %s", intent)
 
@@ -225,13 +256,20 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
     user_tag_prefs: dict = {}
     blacklist: set[str] = set()
     recent_feedback_context: dict = {}
+
     if req.user_id:
         profile = await get_user_profile(req.user_id)
+
         user_tag_prefs = profile.get("tag_preferences", {})
         blacklist = set(await get_user_blacklist(req.user_id, hours=24))
         recent_feedback_context = await get_recent_feedback_context(req.user_id)
+
         if blacklist:
-            logger.info("黑名单过滤 user=%s count=%d", req.user_id, len(blacklist))
+            logger.info(
+                "黑名单过滤 user=%s count=%d",
+                req.user_id,
+                len(blacklist)
+            )
 
     # Step 2: 获取候选餐厅
     try:
@@ -241,57 +279,114 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
             radius=req.radius,
             max_count=req.max_count * 3,
         )
+
     except Exception as e:
         logger.exception("获取餐馆数据失败")
-        return RecommendResponse(code=-1, message=f"数据获取异常: {str(e)}")
+
+        return RecommendResponse(
+            code=-1,
+            message=f"数据获取异常: {str(e)}"
+        )
 
     if not raw_restaurants:
-        return RecommendResponse(code=1, message="附近暂未找到餐馆，请扩大搜索范围")
+        return RecommendResponse(
+            code=1,
+            message="附近暂未找到餐馆，请扩大搜索范围"
+        )
 
     # Step 3: 黑名单过滤 + exclude_tags 硬排除（用户明确说"不要"的品类）
     if blacklist:
-        raw_restaurants = [r for r in raw_restaurants if r.get("restaurant_id", "") not in blacklist]
+        raw_restaurants = [
+            r for r in raw_restaurants
+            if r.get("restaurant_id", "") not in blacklist
+        ]
 
     if intent.exclude_tags:
         raw_restaurants = [
             r for r in raw_restaurants
-            if not any(et in get_tags(r.get("category", "") or "") for et in intent.exclude_tags)
+            if not any(
+                et in get_tags(r.get("category", "") or "")
+                for et in intent.exclude_tags
+            )
         ]
-        logger.info("exclude_tags 排除后剩余候选：%d", len(raw_restaurants))
+
+        logger.info(
+            "exclude_tags 排除后剩余候选：%d",
+            len(raw_restaurants)
+        )
 
     if not raw_restaurants:
-        return RecommendResponse(code=1, message="附近餐馆已被您排除，请调整筛选条件或稍后再试")
+        return RecommendResponse(
+            code=1,
+            message="附近餐馆已被您排除，请调整筛选条件或稍后再试"
+        )
 
     # Step 4: 打分（含约束惩罚）
-    results = _score_restaurants(raw_restaurants, req, intent, user_tag_prefs)
-    results.sort(key=lambda x: x.score, reverse=True)
-    top_n = results[:req.max_count] if req.max_count else results[:3]
+    results = _score_restaurants(
+        raw_restaurants,
+        req,
+        intent,
+        user_tag_prefs
+    )
 
-    # Step 5: 兜底保底逻辑 —— Top-N 全部 < FALLBACK_THRESHOLD 时，松弛 required→preferred
+    results.sort(key=lambda x: x.score, reverse=True)
+
+    top_n = (
+        results[:req.max_count]
+        if req.max_count
+        else results[:3]
+    )
+
+    # Step 5: 兜底保底逻辑
     fallback_note: str = ""
+
     if top_n and all(r.score < _FALLBACK_THRESHOLD for r in top_n):
+
         logger.info(
             "兜底触发：Top-%d 分数均 < %.2f，降级 required→preferred 重新打分",
-            len(top_n), _FALLBACK_THRESHOLD,
+            len(top_n),
+            _FALLBACK_THRESHOLD,
         )
+
         intent = intent_parser.relax_to_preferred(intent)
-        results = _score_restaurants(raw_restaurants, req, intent, user_tag_prefs)
+
+        results = _score_restaurants(
+            raw_restaurants,
+            req,
+            intent,
+            user_tag_prefs
+        )
+
         results.sort(key=lambda x: x.score, reverse=True)
-        top_n = results[:req.max_count] if req.max_count else results[:3]
-        fallback_note = "附近暂时没有完全符合要求的餐厅，已自动放宽限制重新推荐"
+
+        top_n = (
+            results[:req.max_count]
+            if req.max_count
+            else results[:3]
+        )
+
+        fallback_note = (
+            "附近暂时没有完全符合要求的餐厅，已自动放宽限制重新推荐"
+        )
 
     # Step 6: 并发生成全局解释 + 各餐厅 ai_speech
     speech_inputs = [
         {
             "name": r.name,
             "match_details": r.explain.match_details if r.explain else [],
-            "reasoning_logic": r.explain.reasoning_logic if r.explain else None,
+            "reasoning_logic": (
+                r.explain.reasoning_logic
+                if r.explain else None
+            ),
         }
         for r in top_n
     ]
+
     explanation_system, ai_speeches = await asyncio.gather(
         build_explanation_system(
-            intent, req.query, len(top_n),
+            intent,
+            req.query,
+            len(top_n),
             fallback_note=fallback_note,
             recent_feedback_context=recent_feedback_context,
         ),
@@ -300,6 +395,7 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
 
     # Step 7: 注入 ai_speech
     for restaurant, speech in zip(top_n, ai_speeches):
+
         if restaurant.explain is not None and speech:
             restaurant.explain.ai_speech = speech
 
@@ -314,20 +410,56 @@ async def recommend_async(req: RecommendRequest) -> RecommendResponse:
             restaurant_name=r.name,
             explanation=ExplanationOut(
                 summary=r.explain.summary if r.explain else None,
-                reasoning_logic=r.explain.reasoning_logic if r.explain else None,
-                match_details=r.explain.match_details if r.explain else [],
-                ai_speech=r.explain.ai_speech if r.explain else None,
+                reasoning_logic=(
+                    r.explain.reasoning_logic
+                    if r.explain else None
+                ),
+                match_details=(
+                    r.explain.match_details
+                    if r.explain else []
+                ),
+                ai_speech=(
+                    r.explain.ai_speech
+                    if r.explain else None
+                ),
             ) if r.explain else None,
         )
         for r in top_n
     ]
 
-    logger.info("推荐完成 候选=%d 返回=%d", len(results), len(top_n))
-    return RecommendResponse(
+    logger.info(
+        "推荐完成 候选=%d 返回=%d",
+        len(results),
+        len(top_n)
+    )
+
+    # =========================
+    # 构建响应对象
+    # =========================
+    response = RecommendResponse(
         code=0,
         explanation_system=explanation_system,
         recommendations=recommendation_items,
     )
+
+    # =========================
+    # 写入 Redis 缓存
+    # TTL = 300秒（5分钟）
+    # =========================
+    try:
+        redis_client.setex(
+            cache_key,
+            300,
+            response.model_dump_json()
+        )
+
+        logger.info("推荐结果已写入 Redis")
+
+    except Exception:
+        logger.exception("Redis 写入失败")
+
+    return response
+
 
 
 async def _write_to_db(req: RecommendRequest, results: list[RestaurantOut]) -> None:
