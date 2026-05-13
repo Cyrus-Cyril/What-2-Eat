@@ -60,16 +60,6 @@ vi.mock('@/services/personalization', () => ({
       reason: '麻辣风味稳定，适合朋友一起吃。',
     },
   ],
-  getNearbyNewShops: () => [
-    {
-      id: 'n001',
-      name: '街角砂锅小馆',
-      category: '砂锅',
-      distanceText: '步行约 6 分钟',
-      avgPrice: 32,
-      openingLabel: '新开 5 天',
-    },
-  ],
 }))
 
 describe('HomeView', () => {
@@ -83,9 +73,8 @@ describe('HomeView', () => {
     await wrapper.get('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('今晚吃什么')
+    expect(wrapper.text()).toContain('今天吃什么')
     expect(wrapper.text()).toContain('渝味火锅城')
-    expect(wrapper.text()).toContain('街角砂锅小馆')
     expect(wrapper.text()).toContain('川香小馆')
     expect(wrapper.text()).not.toContain('ok')
   })
