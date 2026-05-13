@@ -283,68 +283,6 @@
   padding: 22px;
 }
 
-.new-shop-card {
-  display: grid;
-  gap: 16px;
-  padding: 22px;
-  border: 1px solid var(--border-strong);
-  border-radius: 28px;
-  background: var(--panel-background);
-  box-shadow: var(--shadow-soft);
-}
-
-.new-shop-header h2,
-.new-shop-name {
-  margin: 0;
-  color: var(--text-strong);
-}
-
-.new-shop-list {
-  display: grid;
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.new-shop-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 14px 0;
-  border-top: 1px solid rgba(145, 103, 69, 0.12);
-}
-
-.new-shop-item:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.new-shop-item:last-child {
-  padding-bottom: 0;
-}
-
-.new-shop-meta,
-.new-shop-price {
-  color: var(--text-muted);
-}
-
-.new-shop-side {
-  display: grid;
-  justify-items: end;
-  gap: 6px;
-}
-
-.new-badge {
-  border-radius: 999px;
-  padding: 6px 10px;
-  background: rgba(255, 187, 79, 0.16);
-  color: #9b5a00;
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
 .carousel-header {
   display: flex;
   gap: 14px;
