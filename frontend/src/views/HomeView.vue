@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fetchRecommendations } from '@/services/api'
 import { authState, logoutUser } from '@/services/auth'
-import { getNearbyNewShops, getPersonalizedRecommendations } from '@/services/personalization'
+import { getPersonalizedRecommendations } from '@/services/personalization'
 
 const quickIdeas = [
   '想吃热乎一点的',
@@ -43,7 +43,6 @@ const activePersonalizedCard = computed(
   () => personalizedCards.value[carouselIndex.value % Math.max(personalizedCards.value.length, 1)],
 )
 const currentUserTags = computed(() => currentUser.value?.preference_json || [])
-const nearbyNewShops = computed(() => getNearbyNewShops())
 const visibleResponseMessage = computed(() => {
   if (!responseMessage.value || responseMessage.value === 'ok') {
     return ''
@@ -336,27 +335,6 @@ async function submitRecommendation() {
           </div>
         </article>
 
-        <article class="new-shop-card">
-          <div class="new-shop-header">
-            <div>
-              <p class="card-label">附近新店</p>
-              <h2>这几家最近刚开</h2>
-            </div>
-          </div>
-
-          <ul class="new-shop-list">
-            <li v-for="shop in nearbyNewShops" :key="shop.id" class="new-shop-item">
-              <div>
-                <p class="new-shop-name">{{ shop.name }}</p>
-                <p class="new-shop-meta">{{ shop.category }} · {{ shop.distanceText }}</p>
-              </div>
-              <div class="new-shop-side">
-                <span class="new-badge">{{ shop.openingLabel }}</span>
-                <span class="new-shop-price">¥{{ shop.avgPrice }}</span>
-              </div>
-            </li>
-          </ul>
-        </article>
       </aside>
     </section>
 
