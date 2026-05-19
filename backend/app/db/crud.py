@@ -52,7 +52,8 @@ async def save_query(req: RecommendRequest) -> str:
 
 
 async def save_recommendations(query_id: str, results: list[RestaurantOut]) -> None:
-    """批量保存推荐记录"""
+    """批量保存推荐记录（含 restaurant_tag 写入）"""
+    from app.services.tag_mapper import get_tags as _get_tags
     try:
         async with get_db() as db:
             # 先 upsert 餐馆数据，满足外键约束
@@ -67,8 +68,70 @@ async def save_recommendations(query_id: str, results: list[RestaurantOut]) -> N
                     rating=r.rating,
                     avg_price=r.avg_price,
                 ))
-            # 必须 flush，使餐馆记录先写入 DB，再插入有外键约束的推荐记录
+            # 必须 flush，使餐馆记录先写入 DB，再插入有外键约束的关联记录
             await db.flush()
+
+            # ── 写入 restaurant_tag ──────────────────────────────────
+            # 1) 解析每家餐厅的标签名
+            restaurant_tag_names: dict[str, list[str]] = {
+                r.restaurant_id: _get_tags(r.category or "")
+                for r in results
+            }
+            all_tag_names: set[str] = {
+                name
+                for names in restaurant_tag_names.values()
+                for name in names
+            }
+
+            # 2) 批量查出 DB 中已存在的标签 name → id 映射
+            tag_name_to_id: dict[str, int] = {}
+            if all_tag_names:
+                tag_rows = await db.execute(
+                    select(Tag.id, Tag.name).where(Tag.name.in_(all_tag_names))
+                )
+                tag_name_to_id = {row.name: row.id for row in tag_rows.all()}
+
+            # 2.5) 将 DB 中不存在的标签自动补录
+            from app.services.tag_mapper import get_tag_type as _get_tag_type
+            missing_names = all_tag_names - tag_name_to_id.keys()
+            if missing_names:
+                for tag_name in missing_names:
+                    new_tag = Tag(
+                        name=tag_name,
+                        type=_get_tag_type(tag_name),
+                    )
+                    db.add(new_tag)
+                await db.flush()  # 让自增 id 回填
+                # 重新查一次，拿到刚插入的 id
+                new_rows = await db.execute(
+                    select(Tag.id, Tag.name).where(Tag.name.in_(missing_names))
+                )
+                tag_name_to_id.update({row.name: row.id for row in new_rows.all()})
+                logger.info(
+                    "自动补录 tag：%s",
+                    ", ".join(sorted(missing_names)),
+                )
+
+            # 3) 合并写入 restaurant_tag（幂等：PK=(restaurant_id, tag_id)）
+            for r in results:
+                for tag_name in restaurant_tag_names.get(r.restaurant_id, []):
+                    tag_id = tag_name_to_id.get(tag_name)
+                    if tag_id is None:
+                        continue  # 标签不在 DB 中，跳过
+                    await db.merge(RestaurantTag(
+                        restaurant_id=r.restaurant_id,
+                        tag_id=tag_id,
+                        weight=1.0,
+                    ))
+
+            logger.debug(
+                "restaurant_tag 写入完成：涉及餐厅=%d 标签命中=%d/%d",
+                len(results),
+                len(tag_name_to_id),
+                len(all_tag_names),
+            )
+            # ─────────────────────────────────────────────────────────
+
             for rank, r in enumerate(results, start=1):
                 explain_dict = r.explain.model_dump() if r.explain else {}
                 db.add(Recommendation(

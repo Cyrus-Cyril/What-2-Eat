@@ -80,3 +80,32 @@ def get_parent_tags(tags: list[str]) -> list[str]:
     for t in tags:
         result.update(_TAG_PARENT_MAP.get(t, []))
     return list(result)
+
+
+# tag.name → tag.type 映射（与 mysql_schema.sql 中 type 枚举一致）
+_TAG_TYPE_MAP: dict[str, str] = {
+    # cuisine
+    "中餐":  "cuisine",
+    "川菜":  "cuisine",
+    "粤菜":  "cuisine",
+    "湘菜":  "cuisine",
+    "日料":  "cuisine",
+    "韩餐":  "cuisine",
+    "西餐":  "cuisine",
+    # taste
+    "辣":   "taste",
+    "清淡":  "taste",
+    "咸鲜":  "taste",
+    # type
+    "快餐":  "type",
+    "火锅":  "type",
+    "烧烤":  "type",
+    "面食":  "type",
+    "米粉":  "type",
+    "海鲜":  "type",
+}
+
+
+def get_tag_type(tag_name: str) -> str:
+    """返回标签对应的 type 字段值，未知标签默认 'cuisine'。"""
+    return _TAG_TYPE_MAP.get(tag_name, "cuisine")

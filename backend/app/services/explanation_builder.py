@@ -11,11 +11,11 @@ import asyncio
 import json
 import logging
 
-import httpx
-
 import config
+from typing import Optional
 from app.services.explainer import ExplainData as LocalExplainData
 from app.services.intent_parser import IntentConstraint
+from app.services.llm_router import router as _router
 from app.models.schemas import (
     StructuredContext,
     ExplanationSystem,
@@ -24,6 +24,11 @@ from app.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── 欢迎语内存缓存（intent_key → hello_voice）─────────────────────
+# 相同意图模式+标签组合复用 LLM 结果，TTL 通过 LRU 上限控制
+_HELLO_CACHE_MAX = 100
+_hello_cache: dict[str, str] = {}
 
 # ── 场景描述映射 ──────────────────────────────────────────
 _SCENE_LABELS: dict[str, str] = {
@@ -100,28 +105,44 @@ _AI_SPEECH_PROMPT_TEMPLATE = """\
 6. 字数控制在60字以内，只输出推荐话术，不要任何JSON或额外解释。\
 """
 
+_BATCH_AI_SPEECH_PROMPT_TEMPLATE = """\
+你是一个有点小幽默、懂吃又懂生活的美食密友。请为以下{count}家餐厅分别生成1-3句推荐理由。
 
-async def _call_llm(prompt: str, timeout: float = 3.0) -> str | None:
-    """调用 LLM API，返回生成文本；超时或失败返回 None。"""
-    if not config.LLM_API_KEY:
-        return None
+{restaurants_info}
+
+语言规则：
+1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
+2. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
+3. 情绪化表达，不要平铺直叙。
+4. 字数每条控制在60字以内。
+5. 只输出JSON数组，数组长度必须等于{count}，格式：["第1家推荐语","第2家推荐语",...]，不要任何解释。\
+"""
+
+
+async def _call_llm(
+    prompt: str,
+    timeout: float = 3.0,
+    total_timeout: float | None = None,
+    max_tokens: int = 120,
+) -> str | None:
+    """
+    调用 LLM API（共享多 Key 路由器），失败返回 None。
+
+    参数：
+        timeout:       单次 HTTP 请求超时（秒）
+        total_timeout: 含排队等待的总超时（秒）；
+                       默认为 timeout + 5s，避免信号量排队导致无限阻塞
+    """
+    wall_clock = total_timeout if total_timeout is not None else (timeout + 5.0)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{config.LLM_API_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
-                json={
-                    "model": config.LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 120,
-                    "temperature": 0.7,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
-    except Exception as exc:
-        logger.debug("LLM 调用失败，降级为规则模板: %s", exc)
+        return await asyncio.wait_for(
+            _router.call(prompt, timeout=timeout, max_tokens=max_tokens, temperature=0.7),
+            timeout=wall_clock,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "LLM 调用总超时（含排队 %.1fs），直接降级为规则模板", wall_clock
+        )
         return None
 
 
@@ -220,7 +241,19 @@ async def build_explanation_system(
         feedback_note=feedback_note if feedback_note else "无",
     )
 
-    hello_voice = await _call_llm(prompt, timeout=3.0)
+    # ── 欢迎语缓存：相同意图模式+标签+反馈直接复用 ──────────────────
+    _hello_cache_key = f"{structured_context.intent_mode}|{core_tags_str}|{feedback_note[:30]}"
+    hello_voice = _hello_cache.get(_hello_cache_key)
+    if hello_voice:
+        logger.debug("欢迎语缓存命中: %s", _hello_cache_key[:40])
+    else:
+        hello_voice = await _call_llm(prompt, timeout=3.0)
+        if hello_voice:
+            # 简单 LRU：超限时清除最旧一半
+            if len(_hello_cache) >= _HELLO_CACHE_MAX:
+                for k in list(_hello_cache.keys())[:_HELLO_CACHE_MAX // 2]:
+                    del _hello_cache[k]
+            _hello_cache[_hello_cache_key] = hello_voice
 
     # LLM 失败 → 规则降级
     if not hello_voice:
@@ -257,6 +290,7 @@ async def build_ai_speech(
 ) -> str | None:
     """
     为单个餐厅生成 ai_speech（LLM，2s 超时，失败返回 None）。
+    仅在单独调用时使用；批量场景请用 build_ai_speeches_for_top_n。
     """
     if not match_details:
         return None
@@ -283,15 +317,62 @@ async def build_ai_speeches_for_top_n(
     restaurants: list[dict],
 ) -> list[str | None]:
     """
-    并发为 top_n 餐厅生成 ai_speech。
+    批量为 top_n 餐厅生成 ai_speech —— 单次 LLM 调用（原来是 N 次并发调用）。
+    大幅降低高并发下的 LLM 请求数：max_count=6 时从 6 次减少到 1 次。
+    失败时降级为全 None（调用方不展示 ai_speech 即可）。
     restaurants 列表中每项包含：name, match_details, reasoning_logic
     """
-    tasks = [
-        build_ai_speech(
-            r["name"],
-            r["match_details"],
-            r["reasoning_logic"],
+    if not restaurants:
+        return []
+
+    # 组装每家餐厅的简要描述
+    parts: list[str] = []
+    for i, r in enumerate(restaurants, 1):
+        match_details: list[DimensionDetail] = r.get("match_details", [])
+        reasoning_logic: Optional[ReasoningLogic] = r.get("reasoning_logic")
+        primary = reasoning_logic.primary_factor if reasoning_logic else ""
+        secondary = reasoning_logic.secondary_factor if reasoning_logic else ""
+        details_lines = "；".join(
+            f"{d.dimension}({d.score_impact})"
+            for d in match_details
+        ) or "无"
+        parts.append(
+            f"[{i}] 餐厅：{r['name']}｜主要优势：{primary}｜次要：{secondary or '无'}｜维度：{details_lines}"
         )
-        for r in restaurants
-    ]
-    return list(await asyncio.gather(*tasks))
+
+    count = len(restaurants)
+    prompt = _BATCH_AI_SPEECH_PROMPT_TEMPLATE.format(
+        count=count,
+        restaurants_info="\n".join(parts),
+    )
+
+    # 批量调用：超时适当放宽（count 越多，max_tokens 越多）
+    # total_timeout = HTTP超时(4s) + 排队余量(6s) = 10s，超时直接降级为全 None
+    max_tokens = min(100 * count, 800)
+    try:
+        raw = await asyncio.wait_for(
+            _router.call(prompt, timeout=4.0, max_tokens=max_tokens, temperature=0.7),
+            timeout=10.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("批量 ai_speech 总超时（含排队 10s），降级为全 None")
+        return [None] * count
+    if not raw:
+        return [None] * count
+
+    try:
+        # 去除可能的 markdown 代码块包裹
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        speeches: list = json.loads(cleaned)
+        if isinstance(speeches, list) and len(speeches) == count:
+            return [str(s) if s else None for s in speeches]
+        # 长度不匹配时取能对应的部分，剩余补 None
+        result = [str(speeches[i]) if i < len(speeches) and speeches[i] else None for i in range(count)]
+        return result
+    except Exception as exc:
+        logger.warning("批量 ai_speech 解析失败（%s），降级为 None", exc)
+        return [None] * count

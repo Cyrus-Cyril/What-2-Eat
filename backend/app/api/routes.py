@@ -11,6 +11,7 @@ from app.models.schemas import (
     FeedbackRequest, FeedbackResponse,
     HistoryResponse, HistoryItem,
     HealthResponse,
+    NearbyRequest, NearbyResponse, NearbyRestaurantItem,
 )
 from app.services.intent_parser import intent_parser
 from app.services.recommender import recommend_async
@@ -24,6 +25,57 @@ router = APIRouter(prefix="/api")
 @router.get("/health", response_model=HealthResponse, tags=["系统"])
 def health_check():
     return HealthResponse(status="ok", version="0.2.0")
+
+
+@router.post("/nearby", response_model=NearbyResponse, tags=["预取"])
+async def prefetch_nearby(req: NearbyRequest):
+    """
+    周边餐厅预取接口。
+    在用户尚未发起推荐请求时，由前端提前调用，传入当前经纬度，
+    后端从高德 API 拉取附近餐厅数据并写入 Redis + 数据库，
+    从而让后续推荐请求直接命中缓存，提升响应速度。
+
+    - 数据会写入 Redis（TTL=600s）供推荐引擎高速读取
+    - 同时 upsert 到 MySQL 供离线查询与缓存过期后的 DB 回源
+    - 返回获取到的餐厅列表，供前端展示"周边餐厅一览"
+    """
+    from app.services.data_entry import prefetch_and_store
+
+    logger.info(
+        "预取请求 lng=%.4f lat=%.4f radius=%d max=%d",
+        req.longitude, req.latitude, req.radius, req.max_count,
+    )
+    restaurants = await prefetch_and_store(
+        longitude=req.longitude,
+        latitude=req.latitude,
+        radius=req.radius,
+        max_count=req.max_count,
+    )
+
+    if not restaurants:
+        return NearbyResponse(code=1, message="附近暂未找到餐厅，请稍后重试", count=0, source="api")
+
+    items = [
+        NearbyRestaurantItem(
+            restaurant_id=r["restaurant_id"],
+            name=r["name"],
+            category=r.get("category", ""),
+            distance_m=int(r.get("distance_m", 0)),
+            rating=float(r.get("rating", 0.0)),
+            avg_price=float(r.get("avg_price", 0.0)),
+            address=r.get("address", ""),
+            latitude=float(r.get("latitude", 0.0)),
+            longitude=float(r.get("longitude", 0.0)),
+        )
+        for r in restaurants
+    ]
+    return NearbyResponse(
+        code=0,
+        message="ok",
+        count=len(items),
+        source="api",
+        restaurants=items,
+    )
 
 
 @router.post("/recommend", response_model=RecommendResponse, tags=["推荐"])

@@ -150,3 +150,32 @@ class HistoryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = Field(default="ok", description="服务状态")
     version: str = Field(default="0.1.0", description="API版本")
+
+
+# ── 周边餐厅预取接口 ──────────────────────────────────────
+
+class NearbyRequest(BaseModel):
+    longitude: float = Field(description="用户当前经度（GCJ-02）")
+    latitude: float = Field(description="用户当前纬度（GCJ-02）")
+    radius: int = Field(default=1000, ge=50, le=50000, description="搜索半径（米）")
+    max_count: int = Field(default=20, ge=1, le=100, description="最多返回餐馆数")
+
+
+class NearbyRestaurantItem(BaseModel):
+    restaurant_id: str = Field(description="高德POI唯一标识")
+    name: str = Field(description="餐馆名称")
+    category: str = Field(default="", description="餐馆类别")
+    distance_m: int = Field(description="距用户距离（米）")
+    rating: float = Field(default=0.0, description="平台评分 0.0~5.0")
+    avg_price: float = Field(default=0.0, description="人均消费（元）")
+    address: str = Field(default="", description="详细地址")
+    latitude: float = Field(description="纬度（GCJ-02）")
+    longitude: float = Field(description="经度（GCJ-02）")
+
+
+class NearbyResponse(BaseModel):
+    code: int = Field(default=0, description="状态码 0=成功 1=无结果")
+    message: str = Field(default="ok", description="状态说明")
+    count: int = Field(default=0, description="返回餐厅数量")
+    source: str = Field(default="api", description="数据来源（api/cache/db）")
+    restaurants: list[NearbyRestaurantItem] = Field(default_factory=list, description="周边餐厅列表")

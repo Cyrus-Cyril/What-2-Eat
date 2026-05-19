@@ -28,12 +28,16 @@ def clean_restaurant(raw: dict) -> Restaurant | None:
     except ValueError:
         distance_m = 0
 
-    category_raw = raw.get("type", "其他")
-    category = category_raw.split(";")[-1].strip() if category_raw else "其他"
+    # 保留完整 type 路径供多段标签匹配使用
+    amap_type_path = raw.get("type", "") or ""
+    # 取最后一段作为 category 显示字段
+    category = amap_type_path.split(";")[-1].strip() if amap_type_path else "其他"
 
     business = raw.get("business", {}) or {}
     rating = _parse_float(business.get("rating", "0"))
     avg_price = _parse_float(business.get("cost", "0"))
+    # 提取高德美食特色标签（taste/scene 维度的重要补充）
+    amap_tags = (business.get("tag") or "").strip()
 
     address = raw.get("address", "地址未知")
     if isinstance(address, list):
@@ -49,6 +53,8 @@ def clean_restaurant(raw: dict) -> Restaurant | None:
         address=address,
         latitude=latitude,
         longitude=longitude,
+        amap_type_path=amap_type_path,
+        amap_tags=amap_tags,
     )
 
 

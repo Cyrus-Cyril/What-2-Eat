@@ -23,10 +23,51 @@ DEFAULT_RADIUS = int(os.getenv("DEFAULT_RADIUS", "1000"))
 DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))
 
 # ── 大模型 API ────────────────────────────────────────────
+# 旧版单 Key（向后兼容，新版优先使用 LLM_PROVIDERS）
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_API_URL = os.getenv("LLM_API_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen-turbo")
 
+
+def _parse_provider_slots(
+    keys_env: str,
+    url_env: str,
+    model_env: str,
+    url_default: str,
+    model_default: str,
+) -> list[dict]:
+    """将逗号分隔的 Key 列表展开为多个 (url, key, model) 槽位。"""
+    keys_str = os.getenv(keys_env, "")
+    keys = [k.strip() for k in keys_str.split(",") if k.strip()]
+    if not keys:
+        return []
+    url = os.getenv(url_env, url_default)
+    model = os.getenv(model_env, model_default)
+    return [{"url": url, "key": k, "model": model} for k in keys]
+
+
+# 多 Provider 槽位列表，轮询调度
+LLM_PROVIDERS: list[dict] = (
+    _parse_provider_slots(
+        "LLM_QWEN_KEYS", "LLM_QWEN_API_URL", "LLM_QWEN_MODEL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo",
+    )
+    + _parse_provider_slots(
+        "LLM_DEEPSEEK_KEYS", "LLM_DEEPSEEK_API_URL", "LLM_DEEPSEEK_MODEL",
+        "https://api.deepseek.com/v1", "deepseek-chat",
+    )
+)
+
+# 若新配置未填写，回退到旧版单 Key
+if not LLM_PROVIDERS and LLM_API_KEY:
+    LLM_PROVIDERS = [{"url": LLM_API_URL, "key": LLM_API_KEY, "model": LLM_MODEL}]
+# ── 数据库连接池 ─────────────────────────────────────────
+# 4个uvicorn worker各自独立连接池，总连接 = workers × (pool_size + max_overflow)
+# MySQL默认 max_connections=151，4×(5+5)=40，留足余量
+DB_POOL_SIZE     = int(os.getenv("DB_POOL_SIZE",     "5"))    # 每worker常驻连接
+DB_MAX_OVERFLOW  = int(os.getenv("DB_MAX_OVERFLOW",  "5"))    # 每worker突发上限
+DB_POOL_TIMEOUT  = int(os.getenv("DB_POOL_TIMEOUT",  "5"))    # 等待连接超时（秒），快速失败
+DB_POOL_RECYCLE  = int(os.getenv("DB_POOL_RECYCLE",  "1800")) # 连接回收周期（秒）
 # ── 服务端口 ──────────────────────────────────────────────
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))

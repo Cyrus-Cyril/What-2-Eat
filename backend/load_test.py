@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
     "concurrent_users": [1, 5, 10, 20],      # 并发用户数列表
     "requests_per_user": 5,                   # 每个用户发送的请求数
     "ramp_up_time": 2,                        # 启动时间（秒），逐步增加并发
-    "request_timeout": 30.0,                  # 单次请求超时时间
+    "request_timeout": 90.0,                  # 单次请求超时时间（改为90s，适配LLM响应延迟）
 }
 
 # 测试用的推荐请求体（模拟真实场景）
@@ -389,7 +389,7 @@ async def run_full_test_suite(
     返回:
         所有测试场景的结果列表
     """
-    tester = LoadTester()
+    tester = LoadTester(timeout=DEFAULT_CONFIG["request_timeout"])
     scenarios = []
     
     try:
