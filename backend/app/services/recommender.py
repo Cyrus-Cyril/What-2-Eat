@@ -258,7 +258,7 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
 
     # Step 2: 获取候选餐厅
     try:
-        raw_restaurants = get_candidate_restaurants(
+        raw_restaurants = await get_candidate_restaurants(
             longitude=req.longitude,
             latitude=req.latitude,
             radius=req.radius,

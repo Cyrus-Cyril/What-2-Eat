@@ -3,6 +3,8 @@
 """
 import sys
 import os
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -12,11 +14,43 @@ from app.models.restaurant import Restaurant
 from app.services.data_entry import get_candidate_restaurants
 
 
+SAMPLE_POIS = [
+    {
+        "id": "B001",
+        "name": "测试川菜馆",
+        "location": "121.473701,31.230416",
+        "distance": "320",
+        "type": "餐饮服务;中餐厅;川菜",
+        "address": "人民广场1号",
+        "business": {"rating": "4.6", "cost": "48"},
+    },
+    {
+        "id": "B002",
+        "name": "测试火锅店",
+        "location": "121.474000,31.231000",
+        "distance": "680",
+        "type": "餐饮服务;火锅店;火锅",
+        "address": ["人民大道2号"],
+        "business": {"rating": "4.3", "cost": "75"},
+    },
+]
+
+
+def _run_get_candidate_restaurants(*args, **kwargs):
+    return asyncio.run(get_candidate_restaurants(*args, **kwargs))
+
+
 def test_normal_case():
-    """正常情况：有效坐标"""
+    """正常情况：有效坐标，mock 地图返回以避免真实网络波动"""
     print("=" * 50)
     print("测试1: 正常坐标查询（上海人民广场）")
-    results = get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=20)
+
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=SAMPLE_POIS),
+    ):
+        results = _run_get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=20)
+
     assert len(results) > 0, "应该返回餐馆数据"
     assert all(k in results[0] for k in ["restaurant_id", "name", "category", "distance_m", "rating", "avg_price", "address", "latitude", "longitude"]), "字段应该完整"
     print(f"OK 成功返回 {len(results)} 条数据，字段完整")
@@ -26,7 +60,11 @@ def test_invalid_coordinates():
     """异常情况：无效坐标"""
     print("=" * 50)
     print("测试2: 无效坐标（经度超出范围）")
-    results = get_candidate_restaurants(200.0, 31.230416)
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=[]),
+    ):
+        results = _run_get_candidate_restaurants(200.0, 31.230416)
     print(f"  返回结果: {len(results)} 条（预期可能为空或少量）")
 
 
@@ -34,7 +72,11 @@ def test_boundary_coordinates():
     """边界情况：中国经纬度边界"""
     print("=" * 50)
     print("测试3: 边界坐标（北京市中心）")
-    results = get_candidate_restaurants(116.407396, 39.904666, radius=1000)
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=SAMPLE_POIS),
+    ):
+        results = _run_get_candidate_restaurants(116.407396, 39.904666, radius=1000)
     print(f"  返回结果: {len(results)} 条数据")
 
 
@@ -42,7 +84,11 @@ def test_small_radius():
     """边界情况：极小搜索半径"""
     print("=" * 50)
     print("测试4: 极小搜索半径（50米）")
-    results = get_candidate_restaurants(121.473701, 31.230416, radius=50)
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=SAMPLE_POIS[:1]),
+    ):
+        results = _run_get_candidate_restaurants(121.473701, 31.230416, radius=50)
     print(f"  返回结果: {len(results)} 条")
 
 
@@ -50,7 +96,11 @@ def test_large_radius():
     """边界情况：较大搜索半径"""
     print("=" * 50)
     print("测试5: 较大搜索半径（5000米）")
-    results = get_candidate_restaurants(121.473701, 31.230416, radius=5000, max_count=30)
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=SAMPLE_POIS),
+    ):
+        results = _run_get_candidate_restaurants(121.473701, 31.230416, radius=5000, max_count=30)
     print(f"  返回结果: {len(results)} 条（请求最多30条）")
 
 
@@ -68,6 +118,19 @@ def test_data_cleaner_edge_cases():
     result = clean_restaurant(raw_bad_location)
     assert result is None, "坐标格式异常应该返回None"
     print("  OK 坐标异常处理正确")
+
+    raw_weird_types = {
+        "id": 123,
+        "name": None,
+        "location": "116.473,39.993",
+        "distance": None,
+        "type": None,
+        "address": None,
+        "business": [],
+    }
+    result = clean_restaurant(raw_weird_types)
+    assert result is None, "名称为空应该返回None，且不能因类型异常崩溃"
+    print("  OK 异常类型处理正确")
 
     raw_normal = {
         "id": "test123",
@@ -110,7 +173,11 @@ def test_field_completeness():
     """测试返回字段完整性"""
     print("=" * 50)
     print("测试8: 字段完整性检查")
-    results = get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=5)
+    with patch(
+        "app.services.data_entry.fetch_nearby_restaurants",
+        new=AsyncMock(return_value=SAMPLE_POIS),
+    ):
+        results = _run_get_candidate_restaurants(121.473701, 31.230416, radius=800, max_count=5)
 
     required_fields = [
         "restaurant_id",

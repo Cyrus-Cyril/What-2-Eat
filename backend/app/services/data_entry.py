@@ -6,6 +6,7 @@
 
 USE_MOCK=true 时三个函数均直接返回 mock_data 中的测试数据。
 """
+import asyncio
 import json
 import logging
 
@@ -114,7 +115,7 @@ async def get_candidates_no_api(
     return []
 
 
-def get_candidate_restaurants(
+async def get_candidate_restaurants(
     longitude: float,
     latitude: float,
     radius: int = 1000,
@@ -135,7 +136,7 @@ def get_candidate_restaurants(
         logger.info("USE_MOCK=true，使用 Mock 数据")
         return get_mock_restaurants(max_count)
 
-    raw_data = fetch_nearby_restaurants(longitude, latitude, radius, max_count)
+    raw_data = await fetch_nearby_restaurants(longitude, latitude, radius, max_count)
     if not raw_data:
         logger.warning("未获取到任何餐馆数据")
         return []
@@ -144,6 +145,12 @@ def get_candidate_restaurants(
     result = [r.to_dict() for r in restaurants]
     logger.info("data_entry(fallback) 完成，有效=%d 条", len(result))
     return result
+
+
+def get_candidate_restaurants_sync(longitude: float, latitude: float,
+                                   radius: int = 1000,
+                                   max_count: int = 20) -> list[dict]:
+    return asyncio.run(get_candidate_restaurants(longitude, latitude, radius, max_count))
 
 
 if __name__ == "__main__":

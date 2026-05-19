@@ -1,7 +1,11 @@
 #redis 配置
 import os
-import redis
 from dotenv import load_dotenv
+
+try:
+    import redis
+except ImportError:
+    redis = None
 
 load_dotenv()
 
@@ -10,7 +14,9 @@ _redis_port = os.getenv("REDIS_PORT")
 
 redis_client = None
 
-if _redis_host and _redis_port:
+if redis is None:
+    print("[INFO] 未安装Redis依赖，将使用无缓存模式")
+elif _redis_host and _redis_port:
     try:
         redis_client = redis.Redis(
             host=_redis_host,
