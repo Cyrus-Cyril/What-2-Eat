@@ -3,6 +3,7 @@
 整合 amap_client + data_cleaner，输出结构化餐馆列表
 USE_MOCK=true 时直接返回 mock_data 中的测试数据
 """
+import asyncio
 import logging
 
 import config
@@ -13,9 +14,9 @@ from app.models.restaurant import Restaurant
 logger = logging.getLogger(__name__)
 
 
-def get_candidate_restaurants(longitude: float, latitude: float,
-                               radius: int = 1000,
-                               max_count: int = 20) -> list[dict]:
+async def get_candidate_restaurants(longitude: float, latitude: float,
+                                    radius: int = 1000,
+                                    max_count: int = 20) -> list[dict]:
 
     logger.info("搜索位置：(%.6f, %.6f) 半径=%dm 数量=%d", longitude, latitude, radius, max_count)
 
@@ -24,7 +25,7 @@ def get_candidate_restaurants(longitude: float, latitude: float,
         logger.info("USE_MOCK=true，使用 Mock 数据")
         return get_mock_restaurants(max_count)
 
-    raw_data = fetch_nearby_restaurants(longitude, latitude, radius, max_count)
+    raw_data = await fetch_nearby_restaurants(longitude, latitude, radius, max_count)
 
     if not raw_data:
         logger.warning("未获取到任何餐馆数据")
@@ -36,6 +37,12 @@ def get_candidate_restaurants(longitude: float, latitude: float,
     return result
 
 
+def get_candidate_restaurants_sync(longitude: float, latitude: float,
+                                   radius: int = 1000,
+                                   max_count: int = 20) -> list[dict]:
+    return asyncio.run(get_candidate_restaurants(longitude, latitude, radius, max_count))
+
+
 if __name__ == "__main__":
     from config import setup_logging
     setup_logging()
@@ -43,7 +50,7 @@ if __name__ == "__main__":
     test_lng = 114.35968
     test_lat = 30.52878
 
-    results = get_candidate_restaurants(test_lng, test_lat, radius=800)
+    results = get_candidate_restaurants_sync(test_lng, test_lat, radius=800)
 
     logger.info("共找到 %d 家餐馆：", len(results))
     for r in results[:5]:

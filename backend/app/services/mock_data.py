@@ -8,7 +8,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R001",
         "name": "老成都川菜馆",
-        "category": "中餐厅;川菜",
+        "category": "川菜",
         "address": "光谷步行街A座101",
         "latitude": 30.532,
         "longitude": 114.362,
@@ -19,7 +19,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R002",
         "name": "渝味火锅城",
-        "category": "中餐厅;火锅",
+        "category": "火锅",
         "address": "关山大道88号",
         "latitude": 30.528,
         "longitude": 114.358,
@@ -30,7 +30,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R003",
         "name": "粤香楼茶餐厅",
-        "category": "中餐厅;粤菜",
+        "category": "粤菜",
         "address": "光谷广场B栋203",
         "latitude": 30.535,
         "longitude": 114.365,
@@ -41,7 +41,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R004",
         "name": "湘情烤鱼",
-        "category": "中餐厅;湘菜",
+        "category": "湘菜",
         "address": "珞喻路12号",
         "latitude": 30.527,
         "longitude": 114.370,
@@ -52,7 +52,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R005",
         "name": "日式拉面馆",
-        "category": "日本料理;拉面",
+        "category": "拉面",
         "address": "光谷国际C区15",
         "latitude": 30.533,
         "longitude": 114.356,
@@ -63,7 +63,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R006",
         "name": "麦辣鸡排快餐",
-        "category": "快餐;炸鸡",
+        "category": "炸鸡",
         "address": "光谷大道102号",
         "latitude": 30.530,
         "longitude": 114.363,
@@ -74,7 +74,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R007",
         "name": "米粉世家",
-        "category": "中餐厅;米粉",
+        "category": "米粉",
         "address": "高新四路5号",
         "latitude": 30.526,
         "longitude": 114.368,
@@ -85,7 +85,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R008",
         "name": "韩式烤肉坊",
-        "category": "韩国料理;烤肉",
+        "category": "烤肉",
         "address": "软件园二路33号",
         "latitude": 30.536,
         "longitude": 114.361,
@@ -96,7 +96,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R009",
         "name": "素食轩",
-        "category": "中餐厅;素食",
+        "category": "素食",
         "address": "光谷创业街8号",
         "latitude": 30.531,
         "longitude": 114.367,
@@ -107,7 +107,7 @@ _MOCK_RESTAURANTS = [
     {
         "restaurant_id": "R010",
         "name": "西式牛排馆",
-        "category": "西餐;牛排",
+        "category": "牛排",
         "address": "民族大道19号",
         "latitude": 30.534,
         "longitude": 114.354,

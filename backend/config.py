@@ -16,7 +16,7 @@ _env_path = find_dotenv(
 load_dotenv(_env_path, override=True)
 
 # ── 高德地图 API ──────────────────────────────────────────
-AMAP_API_KEY = os.getenv("AMAP_API_KEY", "6f38295e3f0fe606c75ea136b154db33")
+AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
 AMAP_SEARCH_URL = os.getenv("AMAP_SEARCH_URL", "https://restapi.amap.com/v5/place/around")
 RESTAURANT_TYPE_CODE = os.getenv("RESTAURANT_TYPE_CODE", "050000")
 DEFAULT_RADIUS = int(os.getenv("DEFAULT_RADIUS", "1000"))
