@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,18 +26,11 @@ from app.services.llm_router import router as _llm_router
 _MAX_CACHE_SIZE = 200
 _intent_cache: dict[str, dict] = {}
 _intent_locks: dict[str, asyncio.Lock] = {}  # per-query 锁
+# 失败缓存过期时间： cache_key → monotonic 时间戳（过期后被视为 miss，重新尝试 LLM）
+_intent_cache_ttl: dict[str, float] = {}
+_FAIL_CACHE_TTL = 60.0  # 失败缓存有效期（秒）：LLM 超时/不可用时，60s 内后续请求直接降级，不再重试
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_float(v) -> float | None:
-    """将 LLM 返回值安全转为 float，非数字类型静默返回 None。"""
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return None
 
 # ── 默认权重（各维度等权基准）────────────────────────────────────────
 _DEFAULT_WEIGHTS: dict[str, float] = {
@@ -77,17 +70,40 @@ class IntentConstraint:
     fallback_applied: bool = False
 
 
-# ── 约束集 LLM Prompt（仅提取语义约束，基础参数已由规则提取）──────────
-# 相比原版缩减约 50% token，加快 LLM prefill 与输出速度
-_CONSTRAINT_PROMPT = """\
-你是餐饮意图解析助手，只输出JSON，无需解释。
-从用户输入提取语义约束集与意图摘要，格式（所有字段必填）：
-{{"constraints":{{"tags":{{"values":[],"strength":"neutral","weight":0.2}},"price":{{"preferred":null,"max_limit":null,"strength":"neutral","weight":0.25,"tolerance":null}},"distance":{{"max_limit":null,"strength":"neutral","weight":0.3}},"rating":{{"strength":"neutral","weight":0.25}}}},"exclude_tags":[],"reason_hint":""}}
-规则：
-- strength枚举：required(必须/一定要/只能/不要) | preferred(想吃/喜欢/最好是/稍微) | neutral(未提及)
-- preferred和max_limit必须是数字（单位：price为元，distance为米）或null，禁止输出字符串
-- weight之和=1.0，按用户说话重心分配；exclude_tags为用户明确排斥的标签数组
+# ── 统一 LLM Prompt（一次调用同时提取参数 + 约束集）────────────────
+_UNIFIED_PROMPT = """\
+你是一个餐饮意图解析助手。请从用户输入中同时提取结构化参数与约束集，以标准 JSON 格式输出。
+
+**Part A — 基础参数**：
+- `budget_max`：最高价格（数字，"很贵"设200，"便宜"设30，否则 null）
+- `budget_min`：最低价格（数字，否则 null）
+- `radius`：搜索范围（数字，单位米。"附近"设1000，"很近"设500，"远一点"设3000，否则 null）
+- `taste`：口味或菜系关键词数组（如 ["川菜","火锅"]，否则 []）
+- `scene`：就餐场景（如 "聚餐"/"约会"，否则 null）
+
+**Part B — 约束集**（键为维度 tags/price/distance/rating）：
+- `strength`：
+  - "required"  → 用户使用了"必须、一定要、只能、不要"等绝对词
+  - "preferred" → 用户使用了"想吃、喜欢、稍微、最好是"等建议词
+  - "neutral"   → 用户未提及
+- `weight`：根据用户说话重心分配 0~1（各维度之和应为 1.0）
+- `values`：（仅 tags 维度）菜系/口味标签数组
+- `preferred`：（仅 price 维度）期望价格（数字，元）
+- `max_limit`：硬性上限（price/distance，数字；price 单位元，distance 单位米）
+- `tolerance`：（仅 price 维度）"high"/"medium"/"low"，对超价的容忍度
+
+**Part C — 其他**：
+- `exclude_tags`：用户明确说"不要/不喜欢"的标签数组（否则 []）
+- `reason_hint`：一句话总结用户意图（中文）
+
 用户输入："{query}"
+
+输出要求：只输出 JSON，严禁任何额外解释。
+示例：{{"budget_max": 100, "budget_min": null, "radius": null, "taste": ["火锅"], "scene": null, \
+"constraints": {{"tags": {{"values": ["火锅"], "strength": "required", "weight": 0.5}}, \
+"price": {{"preferred": 80, "max_limit": 100, "strength": "preferred", "weight": 0.3, "tolerance": "high"}}, \
+"distance": {{"max_limit": 2000, "strength": "neutral", "weight": 0.2}}}}, \
+"exclude_tags": [], "reason_hint": "用户想吃火锅，预算约百元"}}\
 """
 
 
@@ -136,64 +152,6 @@ class IntentParser:
         return constraint
 
     @staticmethod
-    def _extract_params_by_rules(text: str) -> dict:
-        """
-        用正则/关键词从文本中快速提取基础参数（budget/radius/taste/scene），无需 LLM。
-        结果与 LLM 约束集合并后写入缓存，供 parse() 直接使用。
-        """
-        _TASTE_KEYWORDS = (
-            "川菜", "火锅", "日料", "寿司", "烧烤", "快餐", "西餐", "粤菜", "湘菜",
-            "麻辣", "清淡", "甜品", "咖啡", "面条", "饺子", "烤肉", "海鲜", "早茶",
-            "东北菜", "韩餐", "泰国菜", "汉堡", "披萨", "意面", "小吃", "夜宵", "早餐",
-        )
-        result: dict = {"budget_max": None, "budget_min": None,
-                        "radius": None, "taste": [], "scene": None}
-
-        # budget_max
-        if re.search(r"很贵|高档|奢华", text):
-            result["budget_max"] = 200
-        elif re.search(r"便宜|实惠|划算|经济", text):
-            result["budget_max"] = 30
-        else:
-            m = re.search(r"(\d+)\s*(?:元|块)(?:以内|内|左右)?|预算\s*(\d+)|不超过\s*(\d+)", text)
-            if m:
-                result["budget_max"] = int(next(v for v in m.groups() if v is not None))
-
-        # budget_min
-        m = re.search(r"(\d+)\s*(?:元|块)以上|至少\s*(\d+)", text)
-        if m:
-            result["budget_min"] = int(next(v for v in m.groups() if v is not None))
-
-        # radius
-        if re.search(r"很近|就在旁边|楼下", text):
-            result["radius"] = 500
-        elif re.search(r"附近|周边|旁边", text):
-            result["radius"] = 1000
-        elif re.search(r"远一点|稍远|不太远", text):
-            result["radius"] = 3000
-        else:
-            m = re.search(r"(\d+(?:\.\d+)?)\s*公里", text)
-            if m:
-                result["radius"] = int(float(m.group(1)) * 1000)
-            else:
-                m = re.search(r"(\d+)\s*米", text)
-                if m:
-                    result["radius"] = int(m.group(1))
-
-        # taste
-        result["taste"] = [kw for kw in _TASTE_KEYWORDS if kw in text]
-
-        # scene
-        for kw, scene in (("聚餐", "聚餐"), ("约会", "约会"), ("商务", "商务"),
-                          ("家庭", "家庭"), ("生日", "生日"),
-                          ("一个人", "独食"), ("独自", "独食")):
-            if kw in text:
-                result["scene"] = scene
-                break
-
-        return result
-
-    @staticmethod
     def _default_neutral_constraint() -> IntentConstraint:
         """无输入时返回全 neutral 等权默认约束"""
         w = _DEFAULT_WEIGHTS
@@ -223,8 +181,8 @@ class IntentParser:
                 strength = "neutral"
             constraints[dim] = ConstraintItem(
                 values=val.get("values", []) if isinstance(val.get("values"), list) else [],
-                preferred=_safe_float(val.get("preferred")),
-                max_limit=_safe_float(val.get("max_limit")),
+                preferred=float(val["preferred"]) if val.get("preferred") is not None else None,
+                max_limit=float(val["max_limit"]) if val.get("max_limit") is not None else None,
                 strength=strength,
                 weight=float(val.get("weight") or 0.25),
                 tolerance=val.get("tolerance"),
@@ -258,23 +216,25 @@ class IntentParser:
 
     async def _call_unified_llm(self, user_input: str) -> dict:
         """
-        规则提取基础参数（budget/radius/taste）+ LLM 提取语义约束集，合并返回。
+        调用 LLM 一次，同时提取基础参数（budget/radius/taste）和约束集（IntentConstraint）。
         使用共享多 Key 路由器 + 内存缓存 + per-query 锁（防 thundering herd）。
-        LLM 失败时至少返回规则提取结果，保证降级有效。
+        失败时返回空字典，上层各自降级为默认值。
         """
         cache_key = user_input.strip().lower()
 
-        # ── 快速路径：缓存命中 ─────────────────────────────────────────
+        # ── 快速路径：缓存命中（检查 TTL）─────────────────────────────────────────
         if cache_key in _intent_cache:
-            logger.debug("意图解析缓存命中: %s", cache_key[:30])
-            return _intent_cache[cache_key]
-
-        # ── 规则提取（本地，无 IO）─────────────────────────────────────
-        rule_params = self._extract_params_by_rules(user_input)
+            ttl = _intent_cache_ttl.get(cache_key, 0.0)
+            if ttl == 0.0 or _time.monotonic() < ttl:
+                logger.debug("意图解析缓存命中: %s", cache_key[:30])
+                return _intent_cache[cache_key]
+            # TTL 过期：清除旧失败缓存，准备重试 LLM
+            del _intent_cache[cache_key]
+            del _intent_cache_ttl[cache_key]
 
         if not _llm_router.has_providers:
-            logger.debug("LLM 未配置，仅返回规则提取参数")
-            return rule_params
+            logger.debug("LLM 未配置，跳过意图解析")
+            return {}
 
         # ── per-query 锁：同一 query 并发时只发起一次 LLM 调用 ──────────
         if cache_key not in _intent_locks:
@@ -284,43 +244,53 @@ class IntentParser:
         async with lock:
             # 拿到锁后再检查一次缓存（可能已被前一个请求填充）
             if cache_key in _intent_cache:
-                logger.debug("意图解析缓存命中（锁内）: %s", cache_key[:30])
-                return _intent_cache[cache_key]
+                ttl = _intent_cache_ttl.get(cache_key, 0.0)
+                if ttl == 0.0 or _time.monotonic() < ttl:
+                    logger.debug("意图解析缓存命中（锁内）: %s", cache_key[:30])
+                    return _intent_cache[cache_key]
+                # TTL 过期：清除旧失败缓存
+                del _intent_cache[cache_key]
+                del _intent_cache_ttl[cache_key]
 
-            prompt = _CONSTRAINT_PROMPT.format(query=user_input)
+            prompt = _UNIFIED_PROMPT.format(query=user_input)
             try:
                 content = await asyncio.wait_for(
-                    _llm_router.call(prompt, timeout=12.0, max_tokens=300, temperature=0),
-                    timeout=30.0,  # 含排队等待：12s HTTP + 18s 队列余量（允许等候1个完整调用周期）
+                    _llm_router.call(prompt, timeout=20.0, max_tokens=400, temperature=0),
+                    timeout=25.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("意图解析 LLM 调用全局超时（30s），降级为规则提取结果")
-                return rule_params
+                logger.warning("意图解析 LLM 调用全局超时（25s），降级为默认値，写入短期 TTL 缓存")
+                # 写入失败缓存：后续等待者直接命中空结果而不再重试，避免 N×15s 串行雪崩
+                _intent_cache[cache_key] = {}
+                _intent_cache_ttl[cache_key] = _time.monotonic() + _FAIL_CACHE_TTL
+                return {}
 
             if not content:
-                logger.warning("LLM 所有槽位不可用，意图解析降级为规则提取结果")
-                return rule_params
+                logger.warning("LLM 所有槽位不可用，意图解析降级为默认値，写入短期 TTL 缓存")
+                _intent_cache[cache_key] = {}
+                _intent_cache_ttl[cache_key] = _time.monotonic() + _FAIL_CACHE_TTL
+                return {}
 
             try:
                 if content.startswith("```"):
                     content = content.split("```")[1]
                     if content.startswith("json"):
                         content = content[4:]
-                llm_result = json.loads(content)
-                logger.debug("LLM 约束集解析响应: %s", content[:200])
-                # ── 合并：规则参数（Part A）+ LLM 约束集（Part B/C）────────
-                result = {**rule_params, **llm_result}
-                # ── 写入缓存（LRU 简易版：超上限时清除最旧一半）────────
+                result = json.loads(content)
+                logger.debug("LLM 统一解析响应: %s", content[:200])
+                # 写入持久缓存（成功结果，无 TTL）
                 if len(_intent_cache) >= _MAX_CACHE_SIZE:
                     keys_to_remove = list(_intent_cache.keys())[:_MAX_CACHE_SIZE // 2]
                     for k in keys_to_remove:
                         del _intent_cache[k]
                         _intent_locks.pop(k, None)
+                        _intent_cache_ttl.pop(k, None)
                 _intent_cache[cache_key] = result
+                _intent_cache_ttl.pop(cache_key, None)  # 成功结果不设置过期时间
                 return result
             except (json.JSONDecodeError, KeyError, IndexError) as e:
                 logger.warning("LLM 响应解析失败: %s", e)
-        return rule_params
+        return {}
 
     async def parse(
         self,

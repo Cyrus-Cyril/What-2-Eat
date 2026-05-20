@@ -306,7 +306,7 @@ async def get_history(user_id: str, page: int = 1, page_size: int = 20) -> tuple
                     "distance_m": 0,
                     "avg_price": 0.0,
                     "score": r.final_score or 0.0,
-                    "created_at": r.created_at or "",
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
                 })
     except Exception:
         logger.exception("get_history 失败 user=%s", user_id)
