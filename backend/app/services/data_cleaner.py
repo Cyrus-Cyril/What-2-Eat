@@ -65,12 +65,21 @@ def clean_restaurant(raw: dict) -> Restaurant | None:
 
 def clean_restaurants(raw_list: list[dict]) -> list[Restaurant]:
     results = []
+    seen_ids: set[str] = set()
+    dup_count = 0
     for raw in raw_list:
         restaurant = clean_restaurant(raw)
         if restaurant is not None:
+            if restaurant.restaurant_id in seen_ids:
+                dup_count += 1
+                continue
+            seen_ids.add(restaurant.restaurant_id)
             results.append(restaurant)
 
-    logger.info("数据清洗 原始=%d条 → 有效=%d条", len(raw_list), len(results))
+    if dup_count:
+        logger.info("数据清洗 原始=%d条 → 有效=%d条（去重 %d 条）", len(raw_list), len(results), dup_count)
+    else:
+        logger.info("数据清洗 原始=%d条 → 有效=%d条", len(raw_list), len(results))
     return results
 
 

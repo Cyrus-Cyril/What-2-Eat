@@ -12,9 +12,11 @@ from app.models.schemas import (
     HistoryResponse, HistoryItem,
     HealthResponse,
     NearbyRequest, NearbyResponse, NearbyRestaurantItem,
+    PresetRecommendRequest, PresetRecommendResponse,
 )
 from app.services.intent_parser import intent_parser
 from app.services.recommender import recommend_async
+from app.services.preset_recommender import recommend_by_preset
 from app.services.user_profile import update_preference_from_feedback
 from app.db.crud import save_feedback, save_interaction, get_history
 
@@ -88,6 +90,34 @@ async def get_recommendation(req: RecommendRequest):
             raw_params=req.model_dump()
         )
     return await recommend_async(req)
+
+
+@router.post("/preset-recommend", response_model=PresetRecommendResponse, tags=["推荐"])
+async def get_preset_recommendation(req: PresetRecommendRequest):
+    """
+    预设偏好推荐接口 —— 不调用 LLM，基于用户预设标签直接从高德 API 获取数据并评分。
+
+    适用场景：首页右侧"偏好推荐"卡片轮播。
+
+    与 /api/recommend 的区别：
+      - 不经过自然语言意图解析（无 LLM 调用）
+      - 使用独立的固定权重评分公式
+      - 直接基于用户 profile 中的偏好标签、预算、距离等参数
+    """
+    import config as _cfg
+
+    recommendations = await recommend_by_preset(req)
+
+    if not recommendations:
+        return PresetRecommendResponse(code=1, message="附近暂未找到匹配你偏好的餐厅，请稍后重试")
+
+    source = "mock" if _cfg.USE_MOCK else "api"
+    return PresetRecommendResponse(
+        code=0,
+        message="ok",
+        source=source,
+        recommendations=recommendations,
+    )
 
 
 @router.post("/feedback", response_model=FeedbackResponse, tags=["反馈"])

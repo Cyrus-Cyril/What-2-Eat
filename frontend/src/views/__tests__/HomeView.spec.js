@@ -33,6 +33,22 @@ vi.mock('@/services/api', () => ({
       },
     ],
   }),
+  fetchPresetRecommendations: vi.fn().mockResolvedValue({
+    code: 0,
+    recommendations: [
+      {
+        id: 'r001',
+        name: '渝味火锅城',
+        category: '火锅',
+        tags: ['火锅', '中餐', '辣'],
+        avg_price: 58,
+        rating: 4.7,
+        reason: '麻辣风味稳定，适合朋友一起吃。',
+        shared_tags: ['火锅'],
+        score: 0.95,
+      },
+    ],
+  }),
 }))
 
 vi.mock('@/services/auth', () => ({

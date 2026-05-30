@@ -19,7 +19,7 @@ const form = reactive({
   healthy_preference: 0.5,
 })
 
-const tasteOptions = ['川菜', '火锅', '烧烤', '轻食', '健康饮食', '夜宵', '性价比', '聚餐']
+const tasteOptions = ['火锅', '烧烤', '日料', '韩餐', '西餐', '快餐', '面食', '东南亚', '咖啡', '奶茶', '饮品']
 
 watch(
   currentUser,
@@ -32,7 +32,9 @@ watch(
     form.nickname = user.nickname
     form.gender = user.gender
     form.age = user.age
-    form.preference_json = [...(user.preference_json || [])]
+    // 过滤掉已删除的无效标签（只保留当前tasteOptions中的有效标签）
+    const rawTags = user.preference_json || []
+    form.preference_json = rawTags.filter(tag => tasteOptions.includes(tag))
     form.budget_preference_min = user.budget_preference_min
     form.budget_preference_max = user.budget_preference_max
     form.distance_preference = user.distance_preference

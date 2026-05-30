@@ -179,3 +179,41 @@ class NearbyResponse(BaseModel):
     count: int = Field(default=0, description="返回餐厅数量")
     source: str = Field(default="api", description="数据来源（api/cache/db）")
     restaurants: list[NearbyRestaurantItem] = Field(default_factory=list, description="周边餐厅列表")
+
+
+# ── 预设偏好推荐接口 ─────────────────────────────────────
+
+class PresetRecommendRequest(BaseModel):
+    user_id: str | None = Field(default=None, description="用户标识")
+    longitude: float = Field(default=114.362, description="用户当前经度（GCJ-02）")
+    latitude: float = Field(default=30.532, description="用户当前纬度（GCJ-02）")
+    preference_tags: list[str] = Field(default_factory=list, description="用户偏好标签数组")
+    budget_min: float = Field(default=0, ge=0, description="最低预算（元）")
+    budget_max: float = Field(default=100, ge=0, description="最高预算（元）")
+    distance_preference: int = Field(default=2000, ge=50, description="最大可接受距离（米）")
+    spicy_preference: float = Field(default=0.5, ge=0, le=1, description="辣度偏好 0~1")
+    sweet_preference: float = Field(default=0.5, ge=0, le=1, description="甜度偏好 0~1")
+    healthy_preference: float = Field(default=0.5, ge=0, le=1, description="健康饮食偏好 0~1")
+    favorites: list[str] = Field(default_factory=list, description="收藏的餐馆名称列表")
+    max_count: int = Field(default=6, ge=1, le=20, description="最多返回餐馆数")
+
+
+class PresetRestaurantCard(BaseModel):
+    id: str = Field(description="唯一标识")
+    name: str = Field(description="餐馆名称")
+    category: str = Field(description="餐馆类别")
+    tags: list[str] = Field(default_factory=list, description="餐馆标签")
+    avg_price: float = Field(default=0.0, description="人均消费（元）")
+    rating: float = Field(default=0.0, description="平台评分 0.0~5.0")
+    distance_m: int = Field(default=0, description="距用户距离（米）")
+    address: str = Field(default="", description="详细地址")
+    reason: str = Field(default="", description="推荐理由")
+    shared_tags: list[str] = Field(default_factory=list, description="与用户偏好匹配的标签")
+    score: float = Field(default=0.0, description="预设推荐评分")
+
+
+class PresetRecommendResponse(BaseModel):
+    code: int = Field(default=0, description="状态码 0=成功 1=无结果 -1=异常")
+    message: str = Field(default="ok", description="状态说明")
+    source: str = Field(default="api", description="数据来源（api/cache/db/mock）")
+    recommendations: list[PresetRestaurantCard] = Field(default_factory=list, description="推荐餐馆卡片列表")
