@@ -34,6 +34,15 @@ const responseMessage = ref('')
 const explanationSystem = ref(null)
 const recommendations = ref([])
 const carouselIndex = ref(0)
+const expandedCards = reactive(new Set())
+
+function toggleMatchDetails(restaurantId) {
+  if (expandedCards.has(restaurantId)) {
+    expandedCards.delete(restaurantId)
+  } else {
+    expandedCards.add(restaurantId)
+  }
+}
 
 const currentUser = computed(() => authState.currentUser)
 const hasResults = computed(() => recommendations.value.length > 0)
@@ -154,6 +163,7 @@ async function submitRecommendation() {
     recommendations.value = result.recommendations ?? []
     explanationSystem.value = result.explanation_system ?? null
     responseMessage.value = result.message ?? ''
+    expandedCards.clear()
   } catch (error) {
     recommendations.value = []
     explanationSystem.value = null
@@ -354,9 +364,26 @@ async function submitRecommendation() {
         {{ visibleResponseMessage }}
       </div>
 
-      <article v-if="explanationSystem?.welcome_narrative" class="narrative-banner">
+      <article
+        v-if="explanationSystem?.welcome_narrative || explanationSystem?.hello_voice"
+        class="narrative-banner"
+      >
         <p class="card-label">推荐综述</p>
-        <h3>{{ explanationSystem.welcome_narrative }}</h3>
+
+        <div v-if="explanationSystem.hello_voice" class="hello-voice-row">
+          <p class="hello-voice-text">{{ explanationSystem.hello_voice }}</p>
+        </div>
+
+        <h3 v-if="explanationSystem.welcome_narrative">{{ explanationSystem.welcome_narrative }}</h3>
+
+        <div v-if="explanationSystem.structured_context" class="intent-context-row">
+          <span class="intent-mode-badge">{{ explanationSystem.structured_context.intent_mode }}</span>
+          <span
+            v-for="tag in explanationSystem.structured_context.core_tags"
+            :key="tag"
+            class="match-chip"
+          >{{ tag }}</span>
+        </div>
       </article>
 
       <div v-if="hasResults" class="consumer-result-list">
@@ -397,6 +424,34 @@ async function submitRecommendation() {
               <span>{{ detail.detail }}</span>
             </li>
           </ul>
+
+          <div v-if="item.explanation?.match_details?.length" class="match-details-section">
+            <button
+              class="match-details-toggle"
+              type="button"
+              @click="toggleMatchDetails(item.restaurant_id)"
+            >
+              <span>查看评分维度详情</span>
+              <span class="toggle-arrow" :data-open="expandedCards.has(item.restaurant_id)">›</span>
+            </button>
+
+            <ul v-if="expandedCards.has(item.restaurant_id)" class="match-details-list">
+              <li
+                v-for="detail in item.explanation.match_details"
+                :key="`${item.restaurant_id}-md-${detail.dimension}`"
+                class="match-detail-item"
+                :data-impact="detail.score_impact"
+              >
+                <div class="match-detail-header">
+                  <strong>{{ detail.dimension }}</strong>
+                  <span class="impact-badge" :data-impact="detail.score_impact">
+                    {{ detail.score_impact === 'high' ? '高影响' : detail.score_impact === 'low' ? '低影响' : '中等' }}
+                  </span>
+                </div>
+                <span class="match-detail-text">{{ detail.detail }}</span>
+              </li>
+            </ul>
+          </div>
         </article>
       </div>
 

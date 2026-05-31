@@ -383,9 +383,136 @@
 }
 
 .narrative-banner h3 {
-  margin: 0;
+  margin: 10px 0 0;
   font-size: 1.1rem;
   line-height: 1.6;
+}
+
+.hello-voice-row {
+  margin-top: 10px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(255, 236, 200, 0.52);
+}
+
+.hello-voice-text {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--text-strong);
+  font-style: italic;
+}
+
+.intent-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.intent-mode-badge {
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: rgba(92, 128, 89, 0.12);
+  color: #476643;
+}
+
+/* match_details 下拉区域 */
+.match-details-section {
+  margin-top: 16px;
+}
+
+.match-details-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.match-details-toggle:hover {
+  background: rgba(255, 247, 236, 0.92);
+  border-color: rgba(225, 111, 41, 0.22);
+}
+
+.toggle-arrow {
+  display: inline-block;
+  color: var(--text-muted);
+  font-size: 1.15rem;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.toggle-arrow[data-open='true'] {
+  transform: rotate(90deg);
+}
+
+.match-details-list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.match-detail-item {
+  display: grid;
+  gap: 5px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  border-left: 3px solid var(--border-soft);
+}
+
+.match-detail-item[data-impact='high'] {
+  border-left-color: var(--accent);
+}
+
+.match-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.match-detail-text {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.impact-badge {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(120, 120, 120, 0.1);
+  color: var(--text-muted);
+}
+
+.impact-badge[data-impact='high'] {
+  background: rgba(225, 111, 41, 0.12);
+  color: var(--accent-deep);
+}
+
+.impact-badge[data-impact='medium'] {
+  background: rgba(92, 128, 89, 0.12);
+  color: #476643;
 }
 
 .consumer-result-list,

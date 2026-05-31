@@ -34,7 +34,6 @@ def _parse_provider_slots(
     url_env: str,
     model_env: str,
     url_default: str,
-    model_default: str,
 ) -> list[dict]:
     """将逗号分隔的 Key 列表展开为多个 (url, key, model) 槽位。"""
     keys_str = os.getenv(keys_env, "")
@@ -42,19 +41,22 @@ def _parse_provider_slots(
     if not keys:
         return []
     url = os.getenv(url_env, url_default)
-    model = os.getenv(model_env, model_default)
+    model = os.getenv(model_env, "")
+    if not model:
+        logging.warning("%s 未配置，槽位将使用空模型名，请在 .env 中设置", model_env)
     return [{"url": url, "key": k, "model": model} for k in keys]
 
 
 # 多 Provider 槽位列表，轮询调度
+# 模型名必须在 .env 中通过 LLM_QWEN_MODEL / LLM_DEEPSEEK_MODEL 显式指定
 LLM_PROVIDERS: list[dict] = (
     _parse_provider_slots(
         "LLM_QWEN_KEYS", "LLM_QWEN_API_URL", "LLM_QWEN_MODEL",
-        "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
     )
     + _parse_provider_slots(
         "LLM_DEEPSEEK_KEYS", "LLM_DEEPSEEK_API_URL", "LLM_DEEPSEEK_MODEL",
-        "https://api.deepseek.com/v1", "deepseek-chat",
+        "https://api.deepseek.com/v1",
     )
 )
 
