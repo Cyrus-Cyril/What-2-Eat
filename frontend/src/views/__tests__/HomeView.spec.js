@@ -33,6 +33,11 @@ vi.mock('@/services/api', () => ({
       },
     ],
   }),
+  fetchSpeeches: vi.fn().mockResolvedValue({
+    code: 1,
+    message: '尚未就绪',
+    speeches: [],
+  }),
   fetchPresetRecommendations: vi.fn().mockResolvedValue({
     code: 0,
     recommendations: [

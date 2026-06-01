@@ -48,6 +48,14 @@ uvicorn app.main:app --reload
 
 访问 `http://localhost:8000/docs` 查看 API 文档。
 
+如需运行后端测试，安装开发测试依赖：
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
 ### 前端
 
 ```bash
