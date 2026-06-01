@@ -8,9 +8,10 @@ app/services/recommender.py
   - 兜底：Top-N 全部 < FALLBACK_THRESHOLD 时，降级 required→preferred 重新打分
 """
 import asyncio
+import json
 import logging
 import math
-import json
+import uuid
 from dataclasses import asdict
 
 import config as _cfg
@@ -303,23 +304,37 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
         top_n = results[:req.max_count] if req.max_count else results[:3]
         fallback_note = "附近暂时没有完全符合要求的餐厅，已自动放宽限制重新推荐"
 
-    # Step 6: 并发生成全局解释 + 各餐厅 ai_speech
-    speech_inputs = [
-        {
-            "name": r.name,
-            "match_details": r.explain.match_details if r.explain else [],
-            "reasoning_logic": r.explain.reasoning_logic if r.explain else None,
-        }
-        for r in top_n
-    ]
-    explanation_system, ai_speeches = await asyncio.gather(
-        build_explanation_system(
+    # Step 6: 全局解释系统 + ai_speech（fast_mode 时全跳过 LLM）
+    fast_mode = getattr(req, 'fast_mode', False)
+    result_id: str | None = None
+
+    if fast_mode:
+        # 极速模式：跳过所有 LLM，直接用规则模板
+        explanation_system = await build_explanation_system(
             intent, req.query, len(top_n),
             fallback_note=fallback_note,
             recent_feedback_context=recent_feedback_context,
-        ),
-        build_ai_speeches_for_top_n(speech_inputs),
-    )
+            fast_mode=True,
+        )
+        ai_speeches = [None] * len(top_n)
+    else:
+        result_id = uuid.uuid4().hex
+        explanation_system = await build_explanation_system(
+            intent, req.query, len(top_n),
+            fallback_note=fallback_note,
+            recent_feedback_context=recent_feedback_context,
+        )
+        # ai_speech 移出关键路径：后台异步生成，写入 Redis
+        speech_inputs = [
+            {
+                "name": r.name,
+                "match_details": r.explain.match_details if r.explain else [],
+                "reasoning_logic": r.explain.reasoning_logic if r.explain else None,
+            }
+            for r in top_n
+        ]
+        asyncio.ensure_future(_generate_and_cache_speeches(speech_inputs, result_id))
+        ai_speeches = [None] * len(top_n)
 
     # Step 7: 注入 ai_speech
     for restaurant, speech in zip(top_n, ai_speeches):
@@ -350,7 +365,29 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
         code=0,
         explanation_system=explanation_system,
         recommendations=recommendation_items,
+        result_id=result_id,
     )
+
+
+async def _generate_and_cache_speeches(
+    speech_inputs: list[dict],
+    result_id: str,
+) -> None:
+    """ai_speech 后台生成并写入 Redis（不阻塞响应）"""
+    try:
+        from app.db.redis_client import redis_client as _rc
+        speeches = await build_ai_speeches_for_top_n(speech_inputs)
+        if _rc and speeches:
+            import asyncio as _asyncio
+            await _asyncio.to_thread(
+                _rc.setex,
+                f"speeches:{result_id}",
+                300,
+                json.dumps(speeches, ensure_ascii=False),
+            )
+            logger.debug("后台 ai_speech 写入 Redis result_id=%s count=%d", result_id, len(speeches))
+    except Exception:
+        logger.exception("后台生成 ai_speech 失败，不影响主流程")
 
 
 async def _write_to_db(req: RecommendRequest, results: list[RestaurantOut]) -> None:

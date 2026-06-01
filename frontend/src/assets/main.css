@@ -264,6 +264,55 @@
   margin-top: 20px;
 }
 
+.composer-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.fast-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.fast-mode-toggle[data-active='true'] {
+  border-color: #f59e0b;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.ai-speech-block {
+  margin: 10px 0 4px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent, #6366f1);
+  background: color-mix(in srgb, var(--accent, #6366f1) 6%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.ai-speech-text {
+  margin: 0;
+  font-size: 0.93rem;
+  line-height: 1.55;
+  color: var(--text-body);
+}
+
+.ai-speech-loading {
+  margin: 10px 0 4px;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
 .smart-summary {
   display: flex;
   flex-wrap: wrap;

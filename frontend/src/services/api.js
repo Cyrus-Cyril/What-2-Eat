@@ -42,3 +42,9 @@ export async function fetchPresetRecommendations(payload) {
     body: JSON.stringify(payload),
   })
 }
+
+export async function fetchSpeeches(resultId) {
+  return request(`/api/speeches/${resultId}`, {
+    method: 'GET',
+  })
+}

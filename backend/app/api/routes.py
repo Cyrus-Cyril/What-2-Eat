@@ -2,6 +2,8 @@
 app/api/routes.py
 API 路由 —— 所有前后端交互接口的入口
 """
+import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Query
@@ -14,7 +16,7 @@ from app.models.schemas import (
     NearbyRequest, NearbyResponse, NearbyRestaurantItem,
     PresetRecommendRequest, PresetRecommendResponse,
 )
-from app.services.intent_parser import intent_parser
+from app.services.intent_parser import intent_parser, IntentParser
 from app.services.recommender import recommend_async
 from app.services.preset_recommender import recommend_by_preset
 from app.services.user_profile import update_preference_from_feedback
@@ -82,8 +84,10 @@ async def prefetch_nearby(req: NearbyRequest):
 
 @router.post("/recommend", response_model=RecommendResponse, tags=["推荐"])
 async def get_recommendation(req: RecommendRequest):
-    # 如果有 query，使用 intent_parser 解析并合并参数
-    if req.query and req.query.strip():
+    # 极速模式：完全跳过 LLM，直接用默认中性约束
+    if req.fast_mode:
+        req.intent = IntentParser._default_neutral_constraint()
+    elif req.query and req.query.strip():
         req = await intent_parser.parse(
             user_id=req.user_id,
             query=req.query,
@@ -118,6 +122,26 @@ async def get_preset_recommendation(req: PresetRecommendRequest):
         source=source,
         recommendations=recommendations,
     )
+
+
+@router.get("/speeches/{result_id}", tags=["推荐"])
+async def get_speeches(result_id: str):
+    """
+    轮询接口：获取后台异步生成的 ai_speech 列表。
+    推荐接口返回 result_id 后，前端每 1.5s 轮询一次，最多轮询 6 次。
+    code=0 且 speeches 非空表示已就绪；code=1 表示尚未就绪。
+    """
+    from app.db.redis_client import redis_client as _rc
+    if not _rc:
+        return {"code": 1, "message": "缓存不可用", "speeches": []}
+    try:
+        data = await asyncio.to_thread(_rc.get, f"speeches:{result_id}")
+        if not data:
+            return {"code": 1, "message": "尚未就绪", "speeches": []}
+        return {"code": 0, "speeches": json.loads(data)}
+    except Exception:
+        logger.exception("读取 speeches 失败 result_id=%s", result_id)
+        return {"code": 1, "message": "读取失败", "speeches": []}
 
 
 @router.post("/feedback", response_model=FeedbackResponse, tags=["反馈"])

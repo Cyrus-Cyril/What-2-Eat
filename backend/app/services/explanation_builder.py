@@ -198,6 +198,7 @@ async def build_explanation_system(
     result_count: int,
     fallback_note: str = "",
     recent_feedback_context: dict | None = None,
+    fast_mode: bool = False,
 ) -> ExplanationSystem:
     """
     构建全局解释系统：
@@ -246,6 +247,8 @@ async def build_explanation_system(
     hello_voice = _hello_cache.get(_hello_cache_key)
     if hello_voice:
         logger.debug("欢迎语缓存命中: %s", _hello_cache_key[:40])
+    elif fast_mode:
+        hello_voice = None  # 极速模式：直接跳过 LLM，使用规则模板
     else:
         hello_voice = await _call_llm(prompt, timeout=3.0)
         if hello_voice:

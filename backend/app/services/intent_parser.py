@@ -9,8 +9,10 @@ app/services/intent_parser.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import time as _time
 from dataclasses import dataclass, field
 from typing import Any
@@ -19,6 +21,14 @@ import config
 from app.models.schemas import RecommendRequest
 from app.services.user_profile import get_user_profile
 from app.services.llm_router import router as _llm_router
+
+# ── Redis 客户端（可选，不安装或未配置时为 None）
+try:
+    from app.db.redis_client import redis_client as _redis_client
+except Exception:
+    _redis_client = None
+
+_REDIS_TTL = 3600  # 意图缓存有效期（1h）
 
 # ── 意图解析结果内存缓存（query → unified dict）───────────────────────
 # 用于避免相同 query 重复调用 LLM，最多缓存 200 条
@@ -31,6 +41,43 @@ _intent_cache_ttl: dict[str, float] = {}
 _FAIL_CACHE_TTL = 60.0  # 失败缓存有效期（秒）：LLM 超时/不可用时，60s 内后续请求直接降级，不再重试
 
 logger = logging.getLogger(__name__)
+
+# ── 面向 Redis 的异步辅助函数 (同步客户端包装为线程池调用) ──────────
+async def _redis_get(key: str) -> str | None:
+    """non-blocking Redis GET（内部用）"""
+    if not _redis_client:
+        return None
+    try:
+        return await asyncio.to_thread(_redis_client.get, key)
+    except Exception:
+        return None
+
+
+async def _redis_setex(key: str, ttl: int, value: str) -> None:
+    """non-blocking Redis SETEX（内部用）"""
+    if not _redis_client:
+        return
+    try:
+        await asyncio.to_thread(_redis_client.setex, key, ttl, value)
+    except Exception:
+        pass
+
+
+# ── 查询归一化：将不同写法的同义 query 映射到同一 key ───────────────
+def _normalize_query(q: str) -> str:
+    """query 标准化：去标点、小写、去语气词"""
+    q = q.strip().lower()
+    q = re.sub(r'[，。！？,!?~～\s]+', '', q)
+    q = re.sub(r'(我想|我要|帮我|给我|随便|一下|一点|有点|有些)', '', q)
+    return q
+
+
+def _semantic_key(result: dict) -> str:
+    """LLM 结果 → 语义结构 Redis key（不同写法同意图的请求共享）"""
+    tags = sorted(result.get("taste", []) or [])
+    price = result.get("budget_max")
+    radius = result.get("radius")
+    return f"intent:sem:{','.join(tags)}:{price}:{radius}"
 
 # ── 默认权重（各维度等权基准）────────────────────────────────────────
 _DEFAULT_WEIGHTS: dict[str, float] = {
@@ -217,20 +264,31 @@ class IntentParser:
     async def _call_unified_llm(self, user_input: str) -> dict:
         """
         调用 LLM 一次，同时提取基础参数（budget/radius/taste）和约束集（IntentConstraint）。
-        使用共享多 Key 路由器 + 内存缓存 + per-query 锁（防 thundering herd）。
+        查询顺序：L1 进程内字典 → L2a Redis（归一化精确 key）→ LLM。
         失败时返回空字典，上层各自降级为默认值。
         """
-        cache_key = user_input.strip().lower()
+        cache_key = _normalize_query(user_input)  # L1 / L2a 缓存键（归一化后）
 
-        # ── 快速路径：缓存命中（检查 TTL）─────────────────────────────────────────
+        # ── L1: 进程内字典（最快，检查 TTL）────────────────────────────
         if cache_key in _intent_cache:
             ttl = _intent_cache_ttl.get(cache_key, 0.0)
             if ttl == 0.0 or _time.monotonic() < ttl:
-                logger.debug("意图解析缓存命中: %s", cache_key[:30])
+                logger.debug("意图解析缓存命中 (L1): %s", cache_key[:30])
                 return _intent_cache[cache_key]
-            # TTL 过期：清除旧失败缓存，准备重试 LLM
             del _intent_cache[cache_key]
             del _intent_cache_ttl[cache_key]
+
+        # ── L2a: Redis 归一化精确 key──────────────────────────────────
+        redis_l2a_key = f"intent:{hashlib.md5(cache_key.encode()).hexdigest()}"
+        cached_json = await _redis_get(redis_l2a_key)
+        if cached_json:
+            try:
+                result = json.loads(cached_json)
+                logger.debug("意图解析缓存命中 (L2a Redis): %s", cache_key[:30])
+                _intent_cache[cache_key] = result  # 回填 L1
+                return result
+            except Exception:
+                pass
 
         if not _llm_router.has_providers:
             logger.debug("LLM 未配置，跳过意图解析")
@@ -242,31 +300,29 @@ class IntentParser:
         lock = _intent_locks[cache_key]
 
         async with lock:
-            # 拿到锁后再检查一次缓存（可能已被前一个请求填充）
+            # 锁内再检查一次 L1（可能已被前一个请求填充）
             if cache_key in _intent_cache:
                 ttl = _intent_cache_ttl.get(cache_key, 0.0)
                 if ttl == 0.0 or _time.monotonic() < ttl:
                     logger.debug("意图解析缓存命中（锁内）: %s", cache_key[:30])
                     return _intent_cache[cache_key]
-                # TTL 过期：清除旧失败缓存
                 del _intent_cache[cache_key]
                 del _intent_cache_ttl[cache_key]
 
             prompt = _UNIFIED_PROMPT.format(query=user_input)
             try:
                 content = await asyncio.wait_for(
-                    _llm_router.call(prompt, timeout=20.0, max_tokens=400, temperature=0),
-                    timeout=25.0,
+                    _llm_router.call(prompt, timeout=3.5, max_tokens=400, temperature=0),
+                    timeout=4.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("意图解析 LLM 调用全局超时（25s），降级为默认値，写入短期 TTL 缓存")
-                # 写入失败缓存：后续等待者直接命中空结果而不再重试，避免 N×15s 串行雪崩
+                logger.warning("意图解析 LLM 调用超时（4s），降级为默认值，写入短期 TTL 缓存")
                 _intent_cache[cache_key] = {}
                 _intent_cache_ttl[cache_key] = _time.monotonic() + _FAIL_CACHE_TTL
                 return {}
 
             if not content:
-                logger.warning("LLM 所有槽位不可用，意图解析降级为默认値，写入短期 TTL 缓存")
+                logger.warning("LLM 所有槽位不可用，意图解析降级为默认值，写入短期 TTL 缓存")
                 _intent_cache[cache_key] = {}
                 _intent_cache_ttl[cache_key] = _time.monotonic() + _FAIL_CACHE_TTL
                 return {}
@@ -278,15 +334,28 @@ class IntentParser:
                         content = content[4:]
                 result = json.loads(content)
                 logger.debug("LLM 统一解析响应: %s", content[:200])
-                # 写入持久缓存（成功结果，无 TTL）
+
+                # LRU 清理
                 if len(_intent_cache) >= _MAX_CACHE_SIZE:
                     keys_to_remove = list(_intent_cache.keys())[:_MAX_CACHE_SIZE // 2]
                     for k in keys_to_remove:
                         del _intent_cache[k]
                         _intent_locks.pop(k, None)
                         _intent_cache_ttl.pop(k, None)
+
+                # 写入 L1 进程内字典
                 _intent_cache[cache_key] = result
-                _intent_cache_ttl.pop(cache_key, None)  # 成功结果不设置过期时间
+                _intent_cache_ttl.pop(cache_key, None)
+
+                # 写入 L2a Redis（归一化精确 key）
+                result_json = json.dumps(result, ensure_ascii=False)
+                await _redis_setex(redis_l2a_key, _REDIS_TTL, result_json)
+
+                # 写入 L2b Redis（语义结构 key，同意图不同写法共享）
+                sem_key = _semantic_key(result)
+                await _redis_setex(sem_key, _REDIS_TTL, result_json)
+                logger.debug("意图解析写入 Redis L2a=%s L2b=%s", redis_l2a_key, sem_key)
+
                 return result
             except (json.JSONDecodeError, KeyError, IndexError) as e:
                 logger.warning("LLM 响应解析失败: %s", e)

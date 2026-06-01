@@ -50,6 +50,7 @@ class RecommendRequest(BaseModel):
     taste: str | None = Field(default=None, description="口味偏好（如川菜、火锅）")
     max_distance: int | None = Field(default=None, ge=50, description="最大可接受距离（米）")
     people_count: int | None = Field(default=None, ge=1, description="就餐人数")
+    fast_mode: bool = Field(default=False, description="极速模式：完全跳过 LLM，走规则降级，响应 < 1s")
     # 内部字段：由 intent_parser.parse() 写入，不暴露给 API，不参与序列化
     intent: Any = Field(default=None, exclude=True, description="意图约束（内部传递，不序列化）")
 
@@ -103,6 +104,7 @@ class RecommendResponse(BaseModel):
     message: str = Field(default="ok", description="状态说明")
     explanation_system: ExplanationSystem | None = Field(default=None, description="全局解释系统")
     recommendations: list[RecommendationItem] = Field(default_factory=list, description="推荐餐馆列表")
+    result_id: str | None = Field(default=None, description="轮询 ai_speech 的结果标识（fast_mode 时为 null）")
 
 
 # ── 反馈接口 ──────────────────────────────────────────────

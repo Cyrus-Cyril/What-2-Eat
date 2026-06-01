@@ -1,7 +1,7 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { fetchRecommendations } from '@/services/api'
+import { fetchRecommendations, fetchSpeeches } from '@/services/api'
 import { authState, logoutUser } from '@/services/auth'
 import { getPersonalizedRecommendations } from '@/services/personalization'
 
@@ -35,6 +35,10 @@ const explanationSystem = ref(null)
 const recommendations = ref([])
 const carouselIndex = ref(0)
 const expandedCards = reactive(new Set())
+const fastMode = ref(false)
+const resultId = ref(null)
+const speechesLoading = ref(false)
+let _speechPollTimer = null
 
 function toggleMatchDetails(restaurantId) {
   if (expandedCards.has(restaurantId)) {
@@ -189,14 +193,59 @@ function buildPayload() {
     max_count: 6,
     taste: form.taste || currentUser.value?.preference_json?.[0] || undefined,
     people_count: Number(form.people_count),
+    fast_mode: fastMode.value,
     ...buildBudgetRange(form.budget),
   }
 }
+
+function _stopSpeechPoll() {
+  if (_speechPollTimer) {
+    clearInterval(_speechPollTimer)
+    _speechPollTimer = null
+  }
+}
+
+function _startSpeechPoll(rid) {
+  _stopSpeechPoll()
+  speechesLoading.value = true
+  let attempts = 0
+  _speechPollTimer = setInterval(async () => {
+    attempts++
+    try {
+      const data = await fetchSpeeches(rid)
+      if (data?.code === 0 && Array.isArray(data.speeches) && data.speeches.length) {
+        data.speeches.forEach((speech, i) => {
+          const item = recommendations.value[i]
+          if (item && !item.explanation) {
+            item.explanation = {}
+          }
+          if (item?.explanation && speech) {
+            item.explanation.ai_speech = speech
+          }
+        })
+        _stopSpeechPoll()
+        speechesLoading.value = false
+        return
+      }
+    } catch (_) {
+      // 忽略轮询错误
+    }
+    if (attempts >= 6) {
+      _stopSpeechPoll()
+      speechesLoading.value = false
+    }
+  }, 1500)
+}
+
+onUnmounted(_stopSpeechPoll)
 
 async function submitRecommendation() {
   isSubmitting.value = true
   errorMessage.value = ''
   responseMessage.value = ''
+  _stopSpeechPoll()
+  resultId.value = null
+  speechesLoading.value = false
 
   try {
     const result = await fetchRecommendations(buildPayload())
@@ -204,6 +253,11 @@ async function submitRecommendation() {
     explanationSystem.value = result.explanation_system ?? null
     responseMessage.value = result.message ?? ''
     expandedCards.clear()
+    // 如果返回了 result_id，启动 ai_speech 轮询
+    if (result.result_id) {
+      resultId.value = result.result_id
+      _startSpeechPoll(result.result_id)
+    }
   } catch (error) {
     recommendations.value = []
     explanationSystem.value = null
@@ -322,9 +376,22 @@ async function submitRecommendation() {
               <span>{{ form.people_count }} 人</span>
             </div>
 
-            <button class="primary-button" type="submit" :disabled="isSubmitting">
-              {{ isSubmitting ? '推荐中...' : '帮我选吃的' }}
-            </button>
+            <div class="composer-actions">
+              <button
+                class="fast-mode-toggle"
+                type="button"
+                :data-active="fastMode"
+                :title="fastMode ? '极速模式开：跳过 AI 解析，< 1s 返回' : '标准模式：AI 意图解析 + 全景解释'"
+                @click="fastMode = !fastMode"
+              >
+                <span>⚡</span>
+                <span>{{ fastMode ? '极速' : '标准' }}</span>
+              </button>
+
+              <button class="primary-button" type="submit" :disabled="isSubmitting">
+                {{ isSubmitting ? '推荐中...' : '帮我选吃的' }}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -453,6 +520,13 @@ async function submitRecommendation() {
           <p class="consumer-summary">
             {{ item.explanation?.summary || '这家店已经加入本次推荐列表。' }}
           </p>
+
+          <div v-if="item.explanation?.ai_speech" class="ai-speech-block">
+            <p class="ai-speech-text">🤖 {{ item.explanation.ai_speech }}</p>
+          </div>
+          <div v-else-if="speechesLoading && resultId" class="ai-speech-loading">
+            <span>💬 AI 点评生成中…</span>
+          </div>
 
           <div v-if="item.explanation?.reasoning_logic" class="reason-pair">
             <div>
