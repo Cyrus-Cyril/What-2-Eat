@@ -123,10 +123,3 @@ locust -f tests/load/locustfile_standard.py --host http://localhost:8000
 
 locust -f tests/load/locustfile_fast.py --host http://localhost:8000
 ```
-
-### 10用户×60s 基准测试结果
-
-| 模式 | 请求数 | 失败率 | 平均延迟 | P90 延迟 | RPS |
-|------|--------|--------|----------|----------|-----|
-| **极速模式** | 371 | 0% | 61ms | 83ms | 6.2 |
-| **标准模式** | 120 | 0% | 3692ms | 6900ms | 1.8 |
