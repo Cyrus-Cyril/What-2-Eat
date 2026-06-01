@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 
 from app.models.schemas import PresetRecommendRequest, PresetRestaurantCard
-from app.services.tag_mapper import get_tags, get_amap_types_for_tags, get_keywords_for_tags
+from app.services.tag_mapper import get_tags, extract_restaurant_tags, get_amap_types_for_tags, get_keywords_for_tags
 from app.services.data_entry import get_candidate_restaurants
 
 logger = logging.getLogger(__name__)
@@ -43,100 +43,13 @@ _W_RATING = 0.20
 def _tag_check(restaurant: dict, user_tags: list[str]) -> tuple[bool, list[str]]:
     """
     标签匹配检查（不过滤，仅计算匹配）。
-    优先使用 amap_type_path（完整路径），fallback 到 category（最后一段）。
-    补充策略：如果name中包含关键词，额外添加对应标签。
+    复用 extract_restaurant_tags 做 amap_type_path + category + 名称智能识别。
     返回 (has_match, shared_tags)。
     """
     if not user_tags:
         return False, []
 
-    type_path = restaurant.get("amap_type_path", "") or ""
-    category = restaurant.get("category", "") or ""
-    source = type_path if type_path else category
-    r_tags = get_tags(source)
-
-    # 智能补充：根据餐厅名称添加缺失的标签（全面覆盖）
-    name = restaurant.get("name", "") or ""
-    name_lower = name.lower()
-
-    # ── 烧烤类 ──
-    if any(kw in name for kw in ["烧烤", "烤肉", "炭烤", "铁板烧"]):
-        if "烧烤" not in r_tags:
-            r_tags.append("烧烤")
-
-    # ── 火锅类 ──
-    if any(kw in name for kw in ["火锅", "串串", "麻辣烫", "冒菜", "焖锅"]):
-        if "火锅" not in r_tags:
-            r_tags.append("火锅")
-
-    # ── 西餐类 ──
-    if any(kw in name for kw in ["西餐", "牛排", "披萨", "比萨", "意大利", "沙拉"]):
-        if "西餐" not in r_tags:
-            r_tags.append("西餐")
-
-    # ── 日料类 ──
-    if any(kw in name for kw in ["日本", "日式", "寿司", "刺身", "料理", "拉面", "寿喜烧", "日料"]):
-        if "日料" not in r_tags:
-            r_tags.append("日料")
-
-    # ── 韩餐类 ──
-    if any(kw in name for kw in ["韩国", "韩式", "韩国料理", "烤肉", "泡菜", "石锅拌饭", "韩餐"]):
-        if "韩餐" not in r_tags:
-            r_tags.append("韩餐")
-
-    # ── 快餐类 ──
-    if any(kw in name for kw in ["快餐", "汉堡", "炸鸡", "肯德基", "麦当劳", "华莱士", "必胜客", "比格"]):
-        if "快餐" not in r_tags:
-            r_tags.append("快餐")
-
-    # ── 咖啡/饮品类 ──
-    if any(kw in name for kw in ["咖啡", "星巴克", "瑞幸", "漫咖啡", "咖啡厅"]):
-        if "咖啡" not in r_tags:
-            r_tags.append("咖啡")
-        if "饮品" not in r_tags:
-            r_tags.append("饮品")
-
-    if any(kw in name for kw in ["奶茶", "喜茶", "奈雪", "茶颜", "霸王茶姬", "古茗", "蜜雪冰城", "柠季"]):
-        if "饮品" not in r_tags:
-            r_tags.append("饮品")
-        if "奶茶" not in r_tags:
-            r_tags.append("奶茶")
-        if "甜" not in r_tags:
-            r_tags.append("甜")
-
-    if any(kw in name for kw in ["冷饮", "柠檬茶", "果茶", "冰粉", "冰可乐"]):
-        if "饮品" not in r_tags:
-            r_tags.append("饮品")
-
-    # ── 甜品/面包类 ──
-    if any(kw in name for kw in ["甜品", "蛋糕", "烘焙", "面包房", "甜点", "冰淇淋", "DQ", "秋日"]):
-        if "甜品" not in r_tags:
-            r_tags.append("甜品")
-        if "甜" not in r_tags:
-            r_tags.append("甜")
-        if "面包" not in r_tags and ("面包" in name or "烘焙" in name):
-            r_tags.append("面包")
-
-    # ── 面食类 ──
-    if any(kw in name for kw in ["面", "面条", "拉面", "米粉", "米线", "饺子", "馄饨", "兰州", "热干面"]):
-        if "面食" not in r_tags:
-            r_tags.append("面食")
-
-    # ── 东南亚类 ──
-    if any(kw in name for kw in ["泰国", "越南", "印度", "咖喱", "冬阴功", "东南亚"]):
-        if "东南亚" not in r_tags:
-            r_tags.append("东南亚")
-
-    # ── 海鲜类 ──
-    if any(kw in name for kw in ["海鲜", "龙虾", "螃蟹", "贝类", "鱼鲜", "水产"]):
-        if "海鲜" not in r_tags:
-            r_tags.append("海鲜")
-
-    # ── 小吃类（兜底）──
-    if any(kw in name for kw in ["小吃", "早餐", "包子", "煎饼", "鸭脖", "卤味"]):
-        if "小吃" not in r_tags:
-            r_tags.append("小吃")
-
+    r_tags = extract_restaurant_tags(restaurant)
     shared = [t for t in user_tags if t in r_tags]
     return len(shared) > 0, shared
 
@@ -149,58 +62,11 @@ def _score_preset(
     零匹配餐厅仍会打分，但 tag_score=0 导致基础分偏低，且最终会被排在匹配餐厅之后。
     """
     name = restaurant.get("name", "?")
-    type_path = restaurant.get("amap_type_path", "") or ""
-    category = restaurant.get("category", "") or ""
-    source_for_tags = type_path if type_path else category
     price = float(restaurant.get("avg_price", 0) or 0)
     rating = float(restaurant.get("rating", 0) or 0)
     user_tags = req.preference_tags
 
-    r_tags = get_tags(source_for_tags)
-
-    # 智能补充：根据餐厅名称添加缺失的标签（与_tag_check保持完全一致）
-    if any(kw in name for kw in ["烧烤", "烤肉", "炭烤", "铁板烧"]):
-        if "烧烤" not in r_tags:
-            r_tags.append("烧烤")
-    if any(kw in name for kw in ["火锅", "串串", "麻辣烫", "冒菜", "焖锅"]):
-        if "火锅" not in r_tags:
-            r_tags.append("火锅")
-    if any(kw in name for kw in ["西餐", "牛排", "披萨", "比萨", "意大利", "沙拉"]):
-        if "西餐" not in r_tags:
-            r_tags.append("西餐")
-    if any(kw in name for kw in ["日本", "日式", "寿司", "刺身", "料理", "拉面", "寿喜烧", "日料"]):
-        if "日料" not in r_tags:
-            r_tags.append("日料")
-    if any(kw in name for kw in ["韩国", "韩式", "韩国料理", "烤肉", "泡菜", "石锅拌饭", "韩餐"]):
-        if "韩餐" not in r_tags:
-            r_tags.append("韩餐")
-    if any(kw in name for kw in ["快餐", "汉堡", "炸鸡", "肯德基", "麦当劳", "华莱士", "必胜客", "比格"]):
-        if "快餐" not in r_tags:
-            r_tags.append("快餐")
-    if any(kw in name for kw in ["咖啡", "星巴克", "瑞幸", "漫咖啡", "咖啡厅"]):
-        if "咖啡" not in r_tags:
-            r_tags.append("咖啡")
-        if "饮品" not in r_tags:
-            r_tags.append("饮品")
-    if any(kw in name for kw in ["奶茶", "喜茶", "奈雪", "茶颜", "霸王茶姬", "古茗", "蜜雪冰城", "柠季"]):
-        if "饮品" not in r_tags:
-            r_tags.append("饮品")
-        if "奶茶" not in r_tags:
-            r_tags.append("奶茶")
-    if any(kw in name for kw in ["甜品", "蛋糕", "烘焙", "面包房", "甜点", "冰淇淋", "DQ", "秋日"]):
-        if "甜品" not in r_tags:
-            r_tags.append("甜品")
-    if ("面包" in name or "烘焙" in name) and "面包" not in r_tags:
-        r_tags.append("面包")
-    if any(kw in name for kw in ["面", "面条", "拉面", "米粉", "米线", "饺子", "馄饨", "兰州", "热干面"]):
-        if "面食" not in r_tags:
-            r_tags.append("面食")
-    if any(kw in name for kw in ["泰国", "越南", "印度", "咖喱", "冬阴功", "东南亚"]):
-        if "东南亚" not in r_tags:
-            r_tags.append("东南亚")
-    if any(kw in name for kw in ["海鲜", "龙虾", "螃蟹", "贝类", "鱼鲜", "水产"]):
-        if "海鲜" not in r_tags:
-            r_tags.append("海鲜")
+    r_tags = extract_restaurant_tags(restaurant)
 
     # ── 1. 标签匹配分 ────────────────────────────────────────
     # 多标签策略：满足任意一个标签即给高分（0.9+），匹配多个标签额外加分

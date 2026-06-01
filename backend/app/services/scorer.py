@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field
 
 from app.models.schemas import RecommendRequest
-from app.services.tag_mapper import get_tags
+from app.services.tag_mapper import get_tags, extract_restaurant_tags
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +102,7 @@ def calc_all(
     )
 
     # ── 标签分 ────────────────────────────────────────────────────────
-    category = restaurant.get("category", "") or ""
-    restaurant_tags = get_tags(category)
+    restaurant_tags = extract_restaurant_tags(restaurant)
     detail.matched_tags = []
 
     # 解析用户 taste（逗号分隔字符串或 None）

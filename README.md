@@ -103,3 +103,30 @@ cp .env.example .env
 - 高德 API 数据默认缓存 5-30 分钟（根据搜索类型自动调整）
 - 预设推荐支持关键词搜索 + 智能名称识别双重保障
 - 前端已实现标签过滤机制，自动清理无效的历史偏好数据
+
+## 🧪 压力测试
+
+使用 Locust 进行并发压力测试：
+
+```bash
+cd backend
+pip install locust
+
+# 标准模式（LLM 意图解析 + AI 解释）
+locust -f tests/load/locustfile_standard.py --headless -u 10 -r 2 --run-time 60s --host http://localhost:8000
+
+# 极速模式（跳过 LLM，< 1s 返回）
+locust -f tests/load/locustfile_fast.py --headless -u 10 -r 2 --run-time 60s --host http://localhost:8000
+
+# Web UI 可视化（浏览器打开 http://localhost:8089）
+locust -f tests/load/locustfile_standard.py --host http://localhost:8000
+
+locust -f tests/load/locustfile_fast.py --host http://localhost:8000
+```
+
+### 10用户×60s 基准测试结果
+
+| 模式 | 请求数 | 失败率 | 平均延迟 | P90 延迟 | RPS |
+|------|--------|--------|----------|----------|-----|
+| **极速模式** | 371 | 0% | 61ms | 83ms | 6.2 |
+| **标准模式** | 120 | 0% | 3692ms | 6900ms | 1.8 |

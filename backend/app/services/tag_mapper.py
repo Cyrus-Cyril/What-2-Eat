@@ -94,6 +94,94 @@ def get_tags(category: str) -> list[str]:
     return list(result)
 
 
+def extract_restaurant_tags(restaurant: dict) -> list[str]:
+    """
+    从餐厅数据中提取标签（供所有推荐引擎共用）。
+
+    策略：
+    1. 优先用 amap_type_path（完整路径），fallback 到 category
+    2. 调用 get_tags() 做关键词匹配
+    3. 根据餐厅名称做智能补充（name fallback）
+    返回去重后的标签列表。
+    """
+    type_path = restaurant.get("amap_type_path", "") or ""
+    category = restaurant.get("category", "") or ""
+    source = type_path if type_path else category
+    r_tags = get_tags(source)
+
+    name = restaurant.get("name", "") or ""
+
+    # ── 烧烤类 ──
+    if any(kw in name for kw in ["烧烤", "烤肉", "炭烤", "铁板烧"]):
+        if "烧烤" not in r_tags:
+            r_tags.append("烧烤")
+
+    # ── 火锅类 ──
+    if any(kw in name for kw in ["火锅", "串串", "麻辣烫", "冒菜", "焖锅"]):
+        if "火锅" not in r_tags:
+            r_tags.append("火锅")
+
+    # ── 西餐类 ──
+    if any(kw in name for kw in ["西餐", "牛排", "披萨", "比萨", "意大利", "沙拉"]):
+        if "西餐" not in r_tags:
+            r_tags.append("西餐")
+
+    # ── 日料类 ──
+    if any(kw in name for kw in ["日本", "日式", "寿司", "刺身", "料理", "拉面", "寿喜烧", "日料"]):
+        if "日料" not in r_tags:
+            r_tags.append("日料")
+
+    # ── 韩餐类 ──
+    if any(kw in name for kw in ["韩国", "韩式", "韩国料理", "泡菜", "石锅拌饭", "韩餐"]):
+        if "韩餐" not in r_tags:
+            r_tags.append("韩餐")
+
+    # ── 快餐类 ──
+    if any(kw in name for kw in ["快餐", "汉堡", "炸鸡", "肯德基", "麦当劳", "华莱士", "必胜客", "比格"]):
+        if "快餐" not in r_tags:
+            r_tags.append("快餐")
+
+    # ── 咖啡/饮品类 ──
+    if any(kw in name for kw in ["咖啡", "星巴克", "瑞幸", "漫咖啡", "咖啡厅"]):
+        if "咖啡" not in r_tags:
+            r_tags.append("咖啡")
+        if "饮品" not in r_tags:
+            r_tags.append("饮品")
+
+    if any(kw in name for kw in ["奶茶", "喜茶", "奈雪", "茶颜", "霸王茶姬", "古茗", "蜜雪冰城", "柠季"]):
+        if "饮品" not in r_tags:
+            r_tags.append("饮品")
+        if "奶茶" not in r_tags:
+            r_tags.append("奶茶")
+        if "甜" not in r_tags:
+            r_tags.append("甜")
+
+    if any(kw in name for kw in ["冷饮", "柠檬茶", "果茶", "冰粉", "冰可乐"]):
+        if "饮品" not in r_tags:
+            r_tags.append("饮品")
+
+    # ── 甜品/面包类 ──
+    if any(kw in name for kw in ["甜品", "蛋糕", "烘焙", "面包房", "甜点", "冰淇淋", "DQ", "秋日"]):
+        if "甜品" not in r_tags:
+            r_tags.append("甜品")
+        if "甜" not in r_tags:
+            r_tags.append("甜")
+        if "面包" not in r_tags and ("面包" in name or "烘焙" in name):
+            r_tags.append("面包")
+
+    # ── 面食类 ──
+    if any(kw in name for kw in ["面", "面条", "拉面", "米粉", "米线", "饺子", "馄饨", "兰州", "热干面"]):
+        if "面食" not in r_tags:
+            r_tags.append("面食")
+
+    # ── 东南亚类 ──
+    if any(kw in name for kw in ["泰国", "越南", "印度", "咖喱", "冬阴功", "东南亚"]):
+        if "东南亚" not in r_tags:
+            r_tags.append("东南亚")
+
+    return r_tags
+
+
 # 标签向上级语义泛化映射：精确标签 → 父级标签列表
 # 用于 Scene C 迭代松弛搜索第三步（语义泛化）
 _TAG_PARENT_MAP: dict[str, list[str]] = {

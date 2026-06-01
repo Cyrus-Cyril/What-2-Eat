@@ -19,7 +19,7 @@ from app.services.data_entry import get_candidate_restaurants
 from app.services.scorer import calc_all
 from app.services.explainer import build_explain
 from app.services.user_profile import get_user_profile
-from app.services.tag_mapper import get_tags
+from app.services.tag_mapper import get_tags, extract_restaurant_tags, get_amap_types_for_tags, get_keywords_for_tags
 from app.services.intent_parser import intent_parser, IntentConstraint, ConstraintItem
 from app.services.explanation_builder import build_explanation_system, build_ai_speeches_for_top_n
 from app.db.crud import get_user_blacklist, get_recent_feedback_context
@@ -97,7 +97,7 @@ class PenaltyCalculator:
             required_tags = constraint.values
             if not required_tags:
                 return 1.0
-            r_tags = get_tags(restaurant.get("category", "") or "")
+            r_tags = extract_restaurant_tags(restaurant)
             # 命中率：matched / total_required
             hit = sum(1 for t in required_tags if t in r_tags) / len(required_tags)
             violation = 1.0 - hit  # 0=全命中, 1=全未命中
@@ -259,11 +259,26 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
 
     # Step 2: 获取候选餐厅
     try:
+        # 从意图中提取标签，用于优化API搜索
+        intent_tags: list[str] = []
+        tags_constraint = intent.constraints.get("tags")
+        if tags_constraint and tags_constraint.values:
+            intent_tags = tags_constraint.values
+        elif req.taste:
+            intent_tags = [t.strip() for t in req.taste.split(",") if t.strip()]
+
+        dynamic_types = get_amap_types_for_tags(intent_tags) if intent_tags else None
+        dynamic_keywords = get_keywords_for_tags(intent_tags) if intent_tags else None
+        if dynamic_types and dynamic_types != "050000":
+            logger.info("主推荐 API 参数优化: tags=%s → types=%s keywords=%s", intent_tags, dynamic_types, dynamic_keywords or "none")
+
         raw_restaurants = await get_candidate_restaurants(
             longitude=req.longitude,
             latitude=req.latitude,
             radius=req.radius,
             max_count=req.max_count * 3,
+            types=dynamic_types,
+            keywords=dynamic_keywords,
         )
     except Exception as e:
         logger.exception("获取餐馆数据失败")
@@ -279,7 +294,7 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
     if intent.exclude_tags:
         raw_restaurants = [
             r for r in raw_restaurants
-            if not any(et in get_tags(r.get("category", "") or "") for et in intent.exclude_tags)
+            if not any(et in extract_restaurant_tags(r) for et in intent.exclude_tags)
         ]
         logger.info("exclude_tags 排除后剩余候选：%d", len(raw_restaurants))
 
