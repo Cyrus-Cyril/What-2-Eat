@@ -88,7 +88,7 @@ _WELCOME_PROMPT_TEMPLATE = """\
 _AI_SPEECH_PROMPT_TEMPLATE = """\
 你是一个有点小幽默、懂吃又懂生活的美食密友。你说话直白坦诚，不讲大道理，更像是在微信上给好朋友发语音推荐餐厅。
 
-请根据以下餐厅数据，用1-3句话生成推荐理由。
+请根据以下餐厅数据，用2-4句话生成推荐理由，内容要具体、有画面感。
 
 餐厅名称：{name}
 主要优势：{primary_factor}
@@ -99,23 +99,28 @@ _AI_SPEECH_PROMPT_TEMPLATE = """\
 语言规则：
 1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
 2. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
-3. 情绪化表达：不要说"距离分数高"，要说"这家就在你楼下，懒人必备！"
-4. 坦诚转折：若有score_impact=low的维度，必须用"虽然...但..."句式坦诚提及，不要掩盖。
-5. 每个提到的理由必须来自score_impact=high的维度数据，不得编造不存在的属性。
-6. 字数控制在60字以内，只输出推荐话术，不要任何JSON或额外解释。\
+3. 情绪化表达：把数据变成画面，如"距离200米"→"走出门口就到"，"人均40"→"一顿午饭的价格"。
+4. 具体细节优先：优先引用维度详情中的具体数字、菜品、标签等信息，让人读完就有感觉。
+5. 坦诚转折：若有score_impact=low的维度，必须用"虽然...但..."句式坦诚提及，不要掩盖。
+6. 适合场景：结尾补一句适合什么情况去（如"约会"、"一个人吃"、"带孩子"、"快节奏午饭"）。
+7. 每个提到的理由必须来自维度数据，不得编造不存在的属性。
+8. 字数控制在100字以内，只输出推荐话术，不要任何JSON或额外解释。\"""
 """
 
 _BATCH_AI_SPEECH_PROMPT_TEMPLATE = """\
-你是一个有点小幽默、懂吃又懂生活的美食密友。请为以下{count}家餐厅分别生成1-3句推荐理由。
+你是一个有点小幽默、懂吃又懂生活的美食密友。请为以下{count}家餐厅分别生成2-4句推荐理由，内容要具体、有画面感。
 
 {restaurants_info}
 
 语言规则：
 1. 严禁出现"基于您的偏好"、"匹配度"、"加权计算"、"归一化"等词汇。
 2. 多用语气助词"哈、哇、嘛、咯、吧"，增加对话感。
-3. 情绪化表达，不要平铺直叙。
-4. 字数每条控制在60字以内。
-5. 只输出JSON数组，数组长度必须等于{count}，格式：["第1家推荐语","第2家推荐语",...]，不要任何解释。\
+3. 情绪化表达：把数据变成画面，如"距离200米"→"走出门口就到"，"人均40"→"一顿午饭的价格"。
+4. 具体细节优先：优先引用各维度的具体描述（菜品、标签、距离数字、价格区间等）。
+5. 坦诚转折：若某项表现一般，用"虽然...但..."句式自然带过，不掩盖。
+6. 结尾补一句适合的场景或人群，让推荐更有温度。
+7. 每条字数控制在100字以内。
+8. 只输出JSON数组，数组长度必须等于{count}，格式：["第1家推荐语","第2家推荐语",...]，不要任何解释。\"""
 """
 
 
@@ -292,8 +297,7 @@ async def build_ai_speech(
     reasoning_logic: ReasoningLogic | None,
 ) -> str | None:
     """
-    为单个餐厅生成 ai_speech（LLM，2s 超时，失败返回 None）。
-    仅在单独调用时使用；批量场景请用 build_ai_speeches_for_top_n。
+    为单个餐厅生成 ai_speech（LLM，10s 超时，失败返回 None）。
     """
     if not match_details:
         return None
@@ -313,69 +317,24 @@ async def build_ai_speech(
         dimension_details_str=details_lines,
     )
 
-    return await _call_llm(prompt, timeout=2.0)
+    return await _call_llm(prompt, timeout=12.0, max_tokens=200)
 
 
 async def build_ai_speeches_for_top_n(
     restaurants: list[dict],
 ) -> list[str | None]:
     """
-    批量为 top_n 餐厅生成 ai_speech —— 单次 LLM 调用（原来是 N 次并发调用）。
-    大幅降低高并发下的 LLM 请求数：max_count=6 时从 6 次减少到 1 次。
-    失败时降级为全 None（调用方不展示 ai_speech 即可）。
-    restaurants 列表中每项包含：name, match_details, reasoning_logic
+    并发为 top_n 餐厅各自生成 ai_speech（asyncio.gather 并行）。
+    每餐厅独立调用，max_tokens=200（单条 100 字），约 8-10s 即可完成。
+    失败时对应位置返回 None，不影响其他餐厅。
     """
     if not restaurants:
         return []
 
-    # 组装每家餐厅的简要描述
-    parts: list[str] = []
-    for i, r in enumerate(restaurants, 1):
+    async def _one(r: dict) -> str | None:
         match_details: list[DimensionDetail] = r.get("match_details", [])
         reasoning_logic: Optional[ReasoningLogic] = r.get("reasoning_logic")
-        primary = reasoning_logic.primary_factor if reasoning_logic else ""
-        secondary = reasoning_logic.secondary_factor if reasoning_logic else ""
-        details_lines = "；".join(
-            f"{d.dimension}({d.score_impact})"
-            for d in match_details
-        ) or "无"
-        parts.append(
-            f"[{i}] 餐厅：{r['name']}｜主要优势：{primary}｜次要：{secondary or '无'}｜维度：{details_lines}"
-        )
+        return await build_ai_speech(r["name"], match_details, reasoning_logic)
 
-    count = len(restaurants)
-    prompt = _BATCH_AI_SPEECH_PROMPT_TEMPLATE.format(
-        count=count,
-        restaurants_info="\n".join(parts),
-    )
-
-    # 批量调用：超时适当放宽（count 越多，max_tokens 越多）
-    # total_timeout = HTTP超时(4s) + 排队余量(6s) = 10s，超时直接降级为全 None
-    max_tokens = min(100 * count, 800)
-    try:
-        raw = await asyncio.wait_for(
-            _router.call(prompt, timeout=4.0, max_tokens=max_tokens, temperature=0.7),
-            timeout=10.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning("批量 ai_speech 总超时（含排队 10s），降级为全 None")
-        return [None] * count
-    if not raw:
-        return [None] * count
-
-    try:
-        # 去除可能的 markdown 代码块包裹
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("```")[1]
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:]
-        speeches: list = json.loads(cleaned)
-        if isinstance(speeches, list) and len(speeches) == count:
-            return [str(s) if s else None for s in speeches]
-        # 长度不匹配时取能对应的部分，剩余补 None
-        result = [str(speeches[i]) if i < len(speeches) and speeches[i] else None for i in range(count)]
-        return result
-    except Exception as exc:
-        logger.warning("批量 ai_speech 解析失败（%s），降级为 None", exc)
-        return [None] * count
+    results = await asyncio.gather(*[_one(r) for r in restaurants], return_exceptions=True)
+    return [r if isinstance(r, str) else None for r in results]

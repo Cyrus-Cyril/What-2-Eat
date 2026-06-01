@@ -155,9 +155,10 @@ class LoadTester:
     - 生成统计报告
     """
     
-    def __init__(self, base_url: str = BASE_URL, timeout: float = 30.0):
+    def __init__(self, base_url: str = BASE_URL, timeout: float = 30.0, fast_mode: bool = False):
         self.base_url = base_url
         self.timeout = timeout
+        self.fast_mode = fast_mode
         self.client: Optional[httpx.AsyncClient] = None
     
     async def _get_client(self) -> httpx.AsyncClient:
@@ -232,8 +233,11 @@ class LoadTester:
             # 获取信号量许可（控制并发）
             async with semaphore:
                 # 轮换使用不同的测试请求
-                payload = TEST_REQUESTS[i % len(TEST_REQUESTS)]
+                payload = dict(TEST_REQUESTS[i % len(TEST_REQUESTS)])
                 payload["user_id"] = f"test_user_{user_id}"
+                if self.fast_mode:
+                    payload["fast_mode"] = True
+                    payload.pop("query", None)
                 
                 # 发送请求并记录结果
                 result = await self.send_recommend_request(user_id, i, payload)
@@ -377,7 +381,8 @@ class LoadTester:
 
 async def run_full_test_suite(
     quick_mode: bool = False,
-    fixed_concurrent: Optional[int] = None
+    fixed_concurrent: Optional[int] = None,
+    fast_mode: bool = False,
 ) -> List[TestScenario]:
     """
     运行完整的测试套件
@@ -390,6 +395,7 @@ async def run_full_test_suite(
         所有测试场景的结果列表
     """
     tester = LoadTester(timeout=DEFAULT_CONFIG["request_timeout"])
+    tester.fast_mode = fast_mode
     scenarios = []
     
     try:
@@ -412,7 +418,9 @@ async def run_full_test_suite(
             concurrent_levels = DEFAULT_CONFIG["concurrent_users"]
             requests_per_user = DEFAULT_CONFIG["requests_per_user"]
         
+        mode_label = "极速模式 (fast_mode=True)" if fast_mode else "标准模式 (LLM)"
         print(f"\n[PLAN] 测试计划:")
+        print(f"   模式: {mode_label}")
         print(f"   并发级别: {concurrent_levels}")
         print(f"   请求数/用户: {requests_per_user}")
         
@@ -547,6 +555,13 @@ async def main():
         default=None,
         help="每个用户的请求数（默认: 5）"
     )
+
+    parser.add_argument(
+        "--fast-mode", "-f",
+        action="store_true",
+        dest="fast_mode",
+        help="极速模式：所有请求使用 fast_mode=True（跳过 LLM，<1s 响应）"
+    )
     
     args = parser.parse_args()
     
@@ -562,6 +577,7 @@ async def main():
     await run_full_test_suite(
         quick_mode=args.quick,
         fixed_concurrent=args.concurrent,
+        fast_mode=args.fast_mode,
     )
     
     print(f"\n[DONE] 测试完成! 时间: {datetime.now().strftime('%H:%M:%S')}")

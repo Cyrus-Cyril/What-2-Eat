@@ -1,0 +1,193 @@
+{
+  "test_time": "2026-06-01T18:37:35.068048",
+  "summary": {
+    "total_scenarios": 1,
+    "total_requests": 15,
+    "overall_success_rate": 100.0
+  },
+  "scenarios": [
+    {
+      "concurrent_users": 5,
+      "total_requests": 15,
+      "results": [
+        {
+          "user_id": 0,
+          "request_id": 0,
+          "start_time": 1780310253.9775488,
+          "end_time": 1780310253.993336,
+          "duration_ms": 15.787124633789062,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3747
+        },
+        {
+          "user_id": 0,
+          "request_id": 1,
+          "start_time": 1780310253.993336,
+          "end_time": 1780310254.025296,
+          "duration_ms": 31.960010528564453,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 2657
+        },
+        {
+          "user_id": 0,
+          "request_id": 2,
+          "start_time": 1780310254.0258017,
+          "end_time": 1780310254.0556679,
+          "duration_ms": 29.86621856689453,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3204
+        },
+        {
+          "user_id": 1,
+          "request_id": 0,
+          "start_time": 1780310254.0907738,
+          "end_time": 1780310254.1049798,
+          "duration_ms": 14.2059326171875,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3747
+        },
+        {
+          "user_id": 1,
+          "request_id": 1,
+          "start_time": 1780310254.1049798,
+          "end_time": 1780310254.1278064,
+          "duration_ms": 22.826671600341797,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 2657
+        },
+        {
+          "user_id": 1,
+          "request_id": 2,
+          "start_time": 1780310254.1278064,
+          "end_time": 1780310254.1583738,
+          "duration_ms": 30.567407608032227,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3204
+        },
+        {
+          "user_id": 2,
+          "request_id": 0,
+          "start_time": 1780310254.2934878,
+          "end_time": 1780310254.3059008,
+          "duration_ms": 12.41302490234375,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3747
+        },
+        {
+          "user_id": 2,
+          "request_id": 1,
+          "start_time": 1780310254.3059008,
+          "end_time": 1780310254.3285952,
+          "duration_ms": 22.69434928894043,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 2657
+        },
+        {
+          "user_id": 2,
+          "request_id": 2,
+          "start_time": 1780310254.3285952,
+          "end_time": 1780310254.359596,
+          "duration_ms": 31.000852584838867,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3204
+        },
+        {
+          "user_id": 3,
+          "request_id": 0,
+          "start_time": 1780310254.5904074,
+          "end_time": 1780310254.6030595,
+          "duration_ms": 12.652158737182617,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3747
+        },
+        {
+          "user_id": 3,
+          "request_id": 1,
+          "start_time": 1780310254.603577,
+          "end_time": 1780310254.6302958,
+          "duration_ms": 26.718854904174805,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 2657
+        },
+        {
+          "user_id": 3,
+          "request_id": 2,
+          "start_time": 1780310254.6302958,
+          "end_time": 1780310254.6632695,
+          "duration_ms": 32.9737663269043,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3204
+        },
+        {
+          "user_id": 4,
+          "request_id": 0,
+          "start_time": 1780310254.9931502,
+          "end_time": 1780310255.01029,
+          "duration_ms": 17.139673233032227,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3747
+        },
+        {
+          "user_id": 4,
+          "request_id": 1,
+          "start_time": 1780310255.01029,
+          "end_time": 1780310255.0346484,
+          "duration_ms": 24.358510971069336,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 2657
+        },
+        {
+          "user_id": 4,
+          "request_id": 2,
+          "start_time": 1780310255.0346484,
+          "end_time": 1780310255.0670393,
+          "duration_ms": 32.39083290100098,
+          "status_code": 200,
+          "success": true,
+          "error_message": "",
+          "response_size": 3204
+        }
+      ],
+      "total_duration": 1.0894904136657715,
+      "qps": 13.767904528439134,
+      "avg_response_time": 23.837025960286457,
+      "min_response_time": 12.41302490234375,
+      "max_response_time": 32.9737663269043,
+      "p50_response_time": 24.358510971069336,
+      "p90_response_time": 32.21850395202637,
+      "p99_response_time": 32.89215564727783,
+      "error_rate": 0.0,
+      "success_count": 15,
+      "error_count": 0,
+      "all_results_count": 15
+    }
+  ]
+}

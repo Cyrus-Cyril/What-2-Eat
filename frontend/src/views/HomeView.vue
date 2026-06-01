@@ -213,24 +213,33 @@ function _startSpeechPoll(rid) {
     attempts++
     try {
       const data = await fetchSpeeches(rid)
-      if (data?.code === 0 && Array.isArray(data.speeches) && data.speeches.length) {
-        data.speeches.forEach((speech, i) => {
-          const item = recommendations.value[i]
-          if (item && !item.explanation) {
-            item.explanation = {}
-          }
-          if (item?.explanation && speech) {
-            item.explanation.ai_speech = speech
-          }
-        })
-        _stopSpeechPoll()
-        speechesLoading.value = false
-        return
+      if (data?.code === 0 && Array.isArray(data.speeches)) {
+        const hasAnySpeech = data.speeches.some(s => s !== null && s !== undefined && s !== '')
+        if (hasAnySpeech) {
+          data.speeches.forEach((speech, i) => {
+            const item = recommendations.value[i]
+            if (item && !item.explanation) {
+              item.explanation = {}
+            }
+            if (item?.explanation && speech) {
+              item.explanation.ai_speech = speech
+            }
+          })
+          _stopSpeechPoll()
+          speechesLoading.value = false
+          return
+        }
+        // speeches 全为 null：LLM 已完成但全部失败，停止轮询不再等待
+        if (data.speeches.length > 0) {
+          _stopSpeechPoll()
+          speechesLoading.value = false
+          return
+        }
       }
     } catch (_) {
       // 忽略轮询错误
     }
-    if (attempts >= 6) {
+    if (attempts >= 17) {
       _stopSpeechPoll()
       speechesLoading.value = false
     }
