@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fetchRecommendations } from '@/services/api'
 import { authState, logoutUser } from '@/services/auth'
@@ -12,7 +12,7 @@ const quickIdeas = [
   '适合两个人一起吃',
 ]
 
-const tasteOptions = ['川菜', '火锅', '烧烤', '轻食', '快餐', '面食']
+const tasteOptions = ['火锅', '烧烤', '日料', '韩餐', '西餐', '快餐', '面食', '东南亚', '咖啡', '奶茶', '饮品']
 const budgetOptions = [
   { label: '随意', value: 'any' },
   { label: '30 元内', value: '30' },
@@ -47,11 +47,16 @@ function toggleMatchDetails(restaurantId) {
 const currentUser = computed(() => authState.currentUser)
 const hasResults = computed(() => recommendations.value.length > 0)
 const highlightedTaste = computed(() => form.taste || '不限口味')
-const personalizedCards = computed(() => getPersonalizedRecommendations(currentUser.value))
+const personalizedCards = ref([])
+const personalizedLoading = ref(false)
 const activePersonalizedCard = computed(
   () => personalizedCards.value[carouselIndex.value % Math.max(personalizedCards.value.length, 1)],
 )
-const currentUserTags = computed(() => currentUser.value?.preference_json || [])
+const currentUserTags = computed(() => {
+  const allTags = currentUser.value?.preference_json || []
+  // 过滤掉已删除的无效标签（只保留当前tasteOptions中的有效标签）
+  return allTags.filter(tag => tasteOptions.includes(tag))
+})
 const visibleResponseMessage = computed(() => {
   if (!responseMessage.value || responseMessage.value === 'ok') {
     return ''
@@ -122,6 +127,41 @@ function moveCarousel(direction) {
   const length = personalizedCards.value.length
   carouselIndex.value = (carouselIndex.value + direction + length) % length
 }
+
+async function loadPersonalizedCards() {
+  if (!currentUser.value) {
+    personalizedCards.value = []
+    return
+  }
+  personalizedLoading.value = true
+  try {
+    personalizedCards.value = await getPersonalizedRecommendations(currentUser.value)
+  } finally {
+    personalizedLoading.value = false
+  }
+}
+
+let _presetLoadingToken = 0
+
+async function loadPersonalizedCardsSafe() {
+  _presetLoadingToken += 1
+  const token = _presetLoadingToken
+  await loadPersonalizedCards()
+  if (token !== _presetLoadingToken) {
+    return
+  }
+}
+
+watch(
+  () => authState.currentUser,
+  (newUser, oldUser) => {
+    if (newUser !== oldUser) {
+      carouselIndex.value = 0
+    }
+    loadPersonalizedCardsSafe()
+  },
+  { immediate: true, deep: true },
+)
 
 function buildBudgetRange(budget) {
   if (budget === '30') {
@@ -303,7 +343,15 @@ async function submitRecommendation() {
             </div>
           </div>
 
-          <template v-if="currentUser && activePersonalizedCard">
+          <template v-if="personalizedLoading">
+            <div class="carousel-body">
+              <p class="carousel-kicker">加载中</p>
+              <h3>正在搜索附近的餐厅...</h3>
+              <p class="carousel-copy">根据你的口味偏好和预算偏好，正在从周边搜索最合适的推荐。</p>
+            </div>
+          </template>
+
+          <template v-else-if="currentUser && activePersonalizedCard">
             <div class="carousel-body">
               <p class="carousel-kicker">{{ activePersonalizedCard.category }}</p>
               <h3>{{ activePersonalizedCard.name }}</h3>
@@ -338,6 +386,11 @@ async function submitRecommendation() {
               </div>
             </div>
           </template>
+
+          <div v-else-if="!personalizedLoading && currentUser" class="carousel-empty">
+            <p>附近暂未找到与你偏好匹配的餐厅，试试调整你的口味和预算偏好。</p>
+            <RouterLink class="primary-link" to="/profile">调整偏好</RouterLink>
+          </div>
 
           <div v-else class="carousel-empty">
             <p>登录后可根据你的常用口味、预算和偏好标签生成专属推荐。</p>

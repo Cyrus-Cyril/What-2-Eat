@@ -120,6 +120,9 @@ async def get_candidate_restaurants(
     latitude: float,
     radius: int = 1000,
     max_count: int = 20,
+    max_pages: int = 1,
+    types: str | None = None,  # 新增：高德POI类型码，如 "050100|050900"
+    keywords: str | None = None,  # 新增：搜索关键词，如 "火锅"
 ) -> list[dict]:
     """
     兜底同步路径：调用高德 API 获取候选餐厅（含 Redis 缓存）。
@@ -127,8 +130,8 @@ async def get_candidate_restaurants(
     正常推荐流程不应直接调用此函数。
     """
     logger.info(
-        "[fallback] get_candidate_restaurants 调用高德 API (%.6f, %.6f) radius=%dm count=%d",
-        longitude, latitude, radius, max_count,
+        "[fallback] get_candidate_restaurants 调用高德 API (%.6f, %.6f) radius=%dm count=%d max_pages=%d types=%s keywords=%s",
+        longitude, latitude, radius, max_count, max_pages, types or "default", keywords or "none",
     )
 
     if config.USE_MOCK:
@@ -136,7 +139,11 @@ async def get_candidate_restaurants(
         logger.info("USE_MOCK=true，使用 Mock 数据")
         return get_mock_restaurants(max_count)
 
-    raw_data = await fetch_nearby_restaurants(longitude, latitude, radius, max_count)
+    raw_data = await fetch_nearby_restaurants(
+        longitude, latitude, radius, page_size=max_count, max_pages=max_pages,
+        types=types,  # 传递types参数
+        keywords=keywords,  # 传递keywords参数
+    )
     if not raw_data:
         logger.warning("未获取到任何餐馆数据")
         return []

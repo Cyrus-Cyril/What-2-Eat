@@ -35,3 +35,10 @@ export async function fetchRecommendations(payload) {
     body: JSON.stringify(payload),
   })
 }
+
+export async function fetchPresetRecommendations(payload) {
+  return request('/api/preset-recommend', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}

@@ -27,7 +27,7 @@ const loginForm = reactive({
   password: '',
 })
 
-const tasteOptions = ['川菜', '火锅', '烧烤', '轻食', '健康饮食', '夜宵', '性价比', '聚餐']
+const tasteOptions = ['火锅', '烧烤', '日料', '韩餐', '西餐', '快餐', '面食', '东南亚', '咖啡', '奶茶', '饮品']
 
 function togglePreference(tag) {
   if (registerForm.preference_json.includes(tag)) {
