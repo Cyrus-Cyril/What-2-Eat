@@ -572,6 +572,10 @@
   gap: 16px;
 }
 
+.consumer-result-list {
+  margin-top: 18px;
+}
+
 .consumer-result-card,
 .system-card,
 .result-card,
@@ -957,4 +961,109 @@
   .dimension-list li {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── 骨架屏 ────────────────────────────────────────────── */
+@keyframes skeleton-shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skeleton-line {
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(230, 220, 210, 0.55) 25%,
+    rgba(248, 242, 234, 0.85) 50%,
+    rgba(230, 220, 210, 0.55) 75%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.4s infinite linear;
+}
+
+.skeleton-label {
+  height: 12px;
+  width: 60px;
+  margin-bottom: 10px;
+}
+
+.skeleton-title {
+  height: 24px;
+  width: 70%;
+  margin-bottom: 14px;
+}
+
+.skeleton-text {
+  height: 14px;
+  width: 90%;
+  margin-bottom: 8px;
+}
+
+.skeleton-text.short {
+  width: 55%;
+}
+
+.skeleton-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.skeleton-btn {
+  height: 34px;
+  width: 88px;
+  border-radius: 999px;
+}
+
+/* ── 反馈按钮 ────────────────────────────────────────────── */
+.feedback-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.feedback-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 16px;
+  border: 1.5px solid var(--border-soft);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.feedback-btn:hover:not(:disabled) {
+  border-color: rgba(225, 111, 41, 0.3);
+  background: rgba(255, 247, 236, 0.92);
+  color: var(--text-strong);
+}
+
+.feedback-btn[data-active='true'] {
+  border-color: rgba(225, 111, 41, 0.45);
+  background: rgba(225, 111, 41, 0.12);
+  color: var(--accent-deep);
+}
+
+.feedback-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }

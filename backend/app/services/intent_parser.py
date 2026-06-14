@@ -117,7 +117,7 @@ class IntentConstraint:
     fallback_applied: bool = False
 
 
-# ── 统一 LLM Prompt（一次调用同时提取参数 + 约束集）────────────────
+# ── 统一 LLM Prompt（一次调用同时提取参数 + 约束集 + 分步解析）────
 _UNIFIED_PROMPT = """\
 你是一个餐饮意图解析助手。请从用户输入中同时提取结构化参数与约束集，以标准 JSON 格式输出。
 
@@ -143,14 +143,23 @@ _UNIFIED_PROMPT = """\
 - `exclude_tags`：用户明确说"不要/不喜欢"的标签数组（否则 []）
 - `reason_hint`：一句话总结用户意图（中文）
 
+**Part D — 分步解析展示**（用于前端阶段动画，固定 5 步）：
+- `analysis_steps`：固定 5 个元素的数组，每个元素格式为 {{"label": "标签", "value": "内容"}}，顺序：
+  1. label="就餐场景" → 如"晚餐"、"午餐"（结合上下文推断）
+  2. label="人数"     → 如"2人"（用户提及则提取，否则写"未知"）
+  3. label="预算"     → 如"30元以内"（从 budget_max 推导）
+  4. label="口味偏好" → 如"火锅"（从 taste 推导，无可写"不限"）
+  5. label="需求"     → 如"热乎的，适合聊天"（总结特殊需求，无可写"无特殊需求"）
+
 用户输入："{query}"
 
 输出要求：只输出 JSON，严禁任何额外解释。
-示例：{{"budget_max": 100, "budget_min": null, "radius": null, "taste": ["火锅"], "scene": null, \
+示例：{{"budget_max": 100, "budget_min": null, "radius": null, "taste": ["火锅"], "scene": "晚餐", \
 "constraints": {{"tags": {{"values": ["火锅"], "strength": "required", "weight": 0.5}}, \
 "price": {{"preferred": 80, "max_limit": 100, "strength": "preferred", "weight": 0.3, "tolerance": "high"}}, \
 "distance": {{"max_limit": 2000, "strength": "neutral", "weight": 0.2}}}}, \
-"exclude_tags": [], "reason_hint": "用户想吃火锅，预算约百元"}}\
+"exclude_tags": [], "reason_hint": "用户想吃火锅，预算约百元", \
+"analysis_steps": [{{"label": "就餐场景", "value": "晚餐"}}, {{"label": "人数", "value": "2人"}}, {{"label": "预算", "value": "100元以内"}}, {{"label": "口味偏好", "value": "火锅"}}, {{"label": "需求", "value": "热乎的，适合聊天"}}]}}\
 """
 
 
@@ -312,11 +321,11 @@ class IntentParser:
             prompt = _UNIFIED_PROMPT.format(query=user_input)
             try:
                 content = await asyncio.wait_for(
-                    _llm_router.call(prompt, timeout=3.5, max_tokens=400, temperature=0),
-                    timeout=4.0,
+                    _llm_router.call(prompt, timeout=9.0, max_tokens=400, temperature=0),
+                    timeout=10.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("意图解析 LLM 调用超时（4s），降级为默认值，写入短期 TTL 缓存")
+                logger.warning("意图解析 LLM 调用超时（10s），降级为默认值，写入短期 TTL 缓存")
                 _intent_cache[cache_key] = {}
                 _intent_cache_ttl[cache_key] = _time.monotonic() + _FAIL_CACHE_TTL
                 return {}

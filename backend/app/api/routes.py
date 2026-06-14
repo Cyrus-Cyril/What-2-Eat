@@ -15,6 +15,7 @@ from app.models.schemas import (
     HealthResponse,
     NearbyRequest, NearbyResponse, NearbyRestaurantItem,
     PresetRecommendRequest, PresetRecommendResponse,
+    ParseIntentResponse, ParsedIntentResult, AnalysisStep,
 )
 from app.services.intent_parser import intent_parser, IntentParser
 from app.services.recommender import recommend_async
@@ -94,6 +95,95 @@ async def get_recommendation(req: RecommendRequest):
             raw_params=req.model_dump()
         )
     return await recommend_async(req)
+
+
+@router.post("/parse-intent", response_model=ParseIntentResponse, tags=["推荐"])
+async def parse_intent_endpoint(req: RecommendRequest):
+    """
+    单独的意图解析接口。供前端在"帮我选吃的"阶段展示解析动画。
+
+    核心逻辑：调用真实 LLM 进行意图解析，然后将 LLM 结果与前端传来的
+    表单参数（taste / budget / people_count）合并，得到最终的综合解析结果。
+    LLM 调用内部做了缓存，后续 /api/recommend 会直接命中缓存。
+    """
+    # ── 1. 调用 LLM（有 query 时）───────────────────────────────
+    raw = {}
+    if req.query and req.query.strip() and not req.fast_mode:
+        raw = await intent_parser._call_unified_llm(req.query)
+
+    # ── 2. 合并 LLM 与前端参数 ──────────────────────────────────
+    # 场景：LLM 推断 > 默认
+    scene = raw.get("scene") or "日常就餐"
+
+    # 人数：前端表单选择为权威来源
+    people_count = f"{req.people_count}人" if req.people_count else "未知人数"
+
+    # 预算：前端 budget_max 优先（有实际选择时），否则用 LLM 推断，再否则"不限"
+    budget_max = req.budget_max or raw.get("budget_max")
+    budget = f"{budget_max}元以内" if budget_max else "不限"
+
+    # 口味：LLM taste + 前端 taste 合并去重
+    llm_tastes = raw.get("taste") or []
+    if not isinstance(llm_tastes, list):
+        llm_tastes = [llm_tastes] if llm_tastes else []
+    frontend_taste = req.taste
+    if frontend_taste:
+        # req.taste 可能是逗号分隔的字符串（如 "火锅,川菜"）
+        if isinstance(frontend_taste, str):
+            frontend_tastes = [t.strip() for t in frontend_taste.split(",") if t.strip()]
+        else:
+            frontend_tastes = [frontend_taste]
+        llm_tastes = [t for t in llm_tastes if t] + [t for t in frontend_tastes if t]
+        # 保序去重
+        seen = set()
+        all_tastes = []
+        for t in llm_tastes:
+            if t and t not in seen:
+                seen.add(t)
+                all_tastes.append(t)
+        llm_tastes = all_tastes
+    taste_str = "、".join(llm_tastes) if llm_tastes else "不限"
+
+    # 需求：LLM reason_hint 为主要来源
+    needs = raw.get("reason_hint") or "无特殊需求"
+
+    # ── 3. 优先使用 LLM 返回的 analysis_steps（已由 LLM 融合推断）──
+    # 但人数 / 预算需要覆盖为前端表单的权威值
+    raw_steps = raw.get("analysis_steps") if raw else None
+    if raw_steps and isinstance(raw_steps, list) and len(raw_steps) == 5:
+        # LLM 返回了 steps：保持 label，但人数/预算用合并后的值覆盖
+        merged_steps = []
+        for s in raw_steps:
+            label = s.get("label", "")
+            value = s.get("value", "")
+            if "人数" in label:
+                value = people_count
+            elif "预算" in label:
+                value = budget
+            elif "口味" in label:
+                value = taste_str
+            merged_steps.append(AnalysisStep(label=label, value=value))
+        analysis_steps = merged_steps
+    else:
+        # LLM 未返回 steps：由合并后的结果自行构造
+        analysis_steps = [
+            AnalysisStep(label="就餐场景", value=scene),
+            AnalysisStep(label="人数", value=people_count),
+            AnalysisStep(label="预算", value=budget),
+            AnalysisStep(label="口味偏好", value=taste_str),
+            AnalysisStep(label="需求", value=needs),
+        ]
+
+    # ── 4. 返回合并后的最终结果 ─────────────────────────────────
+    parsed = ParsedIntentResult(
+        scene=scene,
+        people_count=people_count,
+        budget=budget,
+        taste=taste_str,
+        needs=needs,
+        analysis_steps=analysis_steps,
+    )
+    return ParseIntentResponse(code=0, message="ok", parsed=parsed)
 
 
 @router.post("/preset-recommend", response_model=PresetRecommendResponse, tags=["推荐"])

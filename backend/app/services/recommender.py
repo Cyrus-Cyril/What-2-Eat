@@ -365,6 +365,11 @@ async def _recommend_inner(req: RecommendRequest) -> RecommendResponse:
         RecommendationItem(
             restaurant_id=r.restaurant_id,
             restaurant_name=r.name,
+            latitude=r.latitude,
+            longitude=r.longitude,
+            rating=r.rating,
+            avg_price=r.avg_price,
+            distance_m=r.distance_m,
             explanation=ExplanationOut(
                 summary=r.explain.summary if r.explain else None,
                 reasoning_logic=r.explain.reasoning_logic if r.explain else None,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 import config
 from typing import Optional
@@ -317,24 +318,144 @@ async def build_ai_speech(
         dimension_details_str=details_lines,
     )
 
-    return await _call_llm(prompt, timeout=12.0, max_tokens=200)
+    result = await _call_llm(prompt, timeout=12.0, max_tokens=200)
+    if result:
+        return result
+
+    # LLM 失败或超时：降级为规则模板，基于 match_details 和 reasoning_logic 生成简短语句
+    try:
+        parts: list[str] = []
+        # 取最重要的两条 match_details
+        if match_details:
+            primary = match_details[0]
+            parts.append(f"{restaurant_name}，{primary.dimension}：{primary.detail}")
+            if len(match_details) > 1:
+                secondary = match_details[1]
+                parts.append(f"此外{secondary.dimension}：{secondary.detail}")
+
+        # reasoning_logic 补充场景说明
+        if reasoning_logic and reasoning_logic.primary_factor:
+            parts.append(f"推荐理由：{reasoning_logic.primary_factor.split('：')[-1]}")
+
+        # 组合为 2-4 句的自然话术，保证不超过 100 字
+        fallback = '。'.join(parts)
+        if not fallback:
+            fallback = f"{restaurant_name}，综合表现不错，适合随性尝试。"
+        if len(fallback) > 100:
+            fallback = fallback[:97] + '...'
+        return fallback
+    except Exception:
+        logger.exception("生成 ai_speech 的规则降级模板失败")
+        return None
+
+
+async def _build_ai_speeches_batch(
+    restaurants: list[dict],
+) -> list[str | None] | None:
+    """
+    批量 LLM 调用：一次请求生成所有餐厅的推荐语，返回字符串列表。
+    JSON 解析失败或 LLM 失败时返回 None（调用方应降级到逐条模式）。
+    相比逐条并发，优点：
+      - 只占用 1 个信号量槽位，不造成排队积压
+      - 总耗时约等于单次 LLM 调用时间（而非 N 次）
+    """
+    count = len(restaurants)
+
+    # 构建每家餐厅的描述块
+    blocks: list[str] = []
+    for i, r in enumerate(restaurants, start=1):
+        match_details: list[DimensionDetail] = r.get("match_details", [])
+        reasoning_logic: Optional[ReasoningLogic] = r.get("reasoning_logic")
+
+        details_lines = "\n".join(
+            f"  - {d.dimension}：{d.detail}（影响={d.score_impact}）"
+            for d in match_details
+        ) or "  - 暂无详细数据"
+
+        primary = reasoning_logic.primary_factor if reasoning_logic else "综合评分"
+        secondary = (
+            reasoning_logic.secondary_factor
+            if reasoning_logic and reasoning_logic.secondary_factor
+            else "无"
+        )
+
+        blocks.append(
+            f"【餐厅{i}】{r['name']}\n"
+            f"主要优势：{primary}\n"
+            f"次要优势：{secondary}\n"
+            f"各维度详情：\n{details_lines}"
+        )
+
+    restaurants_info = "\n\n".join(blocks)
+    prompt = _BATCH_AI_SPEECH_PROMPT_TEMPLATE.format(
+        count=count,
+        restaurants_info=restaurants_info,
+    )
+
+    # 批量调用：每家餐厅约 3s 生成余量 + 12s 底线，max_tokens 按 N 家线性放大
+    per_request_timeout = max(count * 3.0 + 12.0, 20.0)
+    total_timeout = per_request_timeout + 8.0
+    max_tokens = count * 120
+
+    raw = await _call_llm(
+        prompt,
+        timeout=per_request_timeout,
+        total_timeout=total_timeout,
+        max_tokens=max_tokens,
+    )
+    if not raw:
+        return None
+
+    # 解析 JSON 数组（兼容 LLM 在输出前后附加 markdown 代码块的情况）
+    try:
+        m = re.search(r'\[.*\]', raw, re.DOTALL)
+        raw_json = m.group(0) if m else raw
+        speeches = json.loads(raw_json)
+        if not isinstance(speeches, list) or len(speeches) != count:
+            logger.warning(
+                "批量 ai_speech 返回长度不符 expected=%d got=%s",
+                count,
+                len(speeches) if isinstance(speeches, list) else type(speeches).__name__,
+            )
+            return None
+        return [s if isinstance(s, str) else None for s in speeches]
+    except Exception as exc:
+        logger.warning("批量 ai_speech JSON 解析失败: %s | raw=%.200s", exc, raw)
+        return None
 
 
 async def build_ai_speeches_for_top_n(
     restaurants: list[dict],
 ) -> list[str | None]:
     """
-    并发为 top_n 餐厅各自生成 ai_speech（asyncio.gather 并行）。
-    每餐厅独立调用，max_tokens=200（单条 100 字），约 8-10s 即可完成。
-    失败时对应位置返回 None，不影响其他餐厅。
+    为 top_n 餐厅批量生成 ai_speech，三层策略保证成功率：
+
+    1. 批量 LLM 调用（1 次请求 N 家，只占 1 个信号量槽位，成功率高）
+    2. 批量失败时降级为逐条并发 LLM 调用
+    3. 每条 LLM 失败时进一步降级为规则模板（build_ai_speech 内已实现）
     """
     if not restaurants:
         return []
 
+    # ── 策略1：批量调用 ──────────────────────────────────────────────
+    if len(restaurants) > 1:
+        batch_result = await _build_ai_speeches_batch(restaurants)
+        if batch_result is not None:
+            logger.debug("批量 ai_speech 生成成功 count=%d", len(batch_result))
+            return batch_result
+        logger.warning("批量 ai_speech 失败，降级为逐条并发调用")
+
+    # ── 策略2：逐条并发调用（每条内部仍有规则降级） ──────────────────
     async def _one(r: dict) -> str | None:
         match_details: list[DimensionDetail] = r.get("match_details", [])
         reasoning_logic: Optional[ReasoningLogic] = r.get("reasoning_logic")
         return await build_ai_speech(r["name"], match_details, reasoning_logic)
 
     results = await asyncio.gather(*[_one(r) for r in restaurants], return_exceptions=True)
-    return [r if isinstance(r, str) else None for r in results]
+    out: list[str | None] = []
+    for r in results:
+        if isinstance(r, str):
+            out.append(r)
+        else:
+            out.append(None)
+    return out

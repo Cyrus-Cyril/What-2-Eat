@@ -164,10 +164,22 @@ async def save_feedback(
     feedback_id = str(uuid.uuid4())
     try:
         async with get_db() as db:
+            # 如果前端传了 recommendation_id，先校验该 recommendation 是否存在，
+            # 避免因引用不存在的 recommendation 导致外键约束失败（IntegrityError）。
+            safe_recommendation_id = recommendation_id
+            if recommendation_id:
+                try:
+                    existing_rec = await db.get(Recommendation, recommendation_id)
+                except Exception:
+                    existing_rec = None
+                if existing_rec is None:
+                    logger.warning("save_feedback: recommendation 不存在，忽略 recommendation_id=%s", recommendation_id)
+                    safe_recommendation_id = None
+
             db.add(Feedback(
                 id=feedback_id,
                 user_id=user_id,
-                recommendation_id=recommendation_id,
+                recommendation_id=safe_recommendation_id,
                 restaurant_id=restaurant_id,
                 rating=rating,
                 chosen=1 if chosen else 0,

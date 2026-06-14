@@ -82,6 +82,30 @@ class ExplanationSystem(BaseModel):
     my_logic: dict | None = Field(default=None, description="推荐引擎执行的松弛策略（仅供前端调试/AI参考）")
 
 
+# ── 意图解析独立接口 ──────────────────────────────────────
+
+class AnalysisStep(BaseModel):
+    label: str = Field(description="步骤标签，如：就餐场景、人数、预算、口味偏好、需求")
+    value: str = Field(description="步骤内容，如：晚餐、2人、30元以内、火锅、热乎的")
+
+
+class ParsedIntentResult(BaseModel):
+    scene: str = Field(default="日常简餐", description="就餐场景")
+    people_count: str = Field(default="1人", description="就餐人数")
+    budget: str = Field(default="不限", description="预算描述")
+    taste: str = Field(default="不限", description="口味偏好")
+    needs: str = Field(default="无特殊需求", description="其他需求")
+    analysis_steps: list[AnalysisStep] = Field(
+        default_factory=list,
+        description="由后端 LLM 直接返回的分步解析结果，前端按此数组逐条展示动画"
+    )
+
+class ParseIntentResponse(BaseModel):
+    code: int = Field(default=0)
+    message: str = Field(default="ok")
+    parsed: ParsedIntentResult = Field(default_factory=ParsedIntentResult)
+
+
 # ── 面向前端的公开输出结构 ────────────────────────────────
 
 class ExplanationOut(BaseModel):
@@ -96,6 +120,11 @@ class RecommendationItem(BaseModel):
     """前端可见的单条推荐结果。"""
     restaurant_id: str = Field(description="高德POI唯一标识")
     restaurant_name: str = Field(description="餐馆名称")
+    latitude: float | None = Field(default=None, description="纬度（GCJ-02）")
+    longitude: float | None = Field(default=None, description="经度（GCJ-02）")
+    rating: float | None = Field(default=None, description="平台评分 0.0~5.0")
+    avg_price: float | None = Field(default=None, description="人均消费（元）")
+    distance_m: int | None = Field(default=None, description="距用户距离（米）")
     explanation: ExplanationOut | None = Field(default=None, description="解释结果")
 
 
